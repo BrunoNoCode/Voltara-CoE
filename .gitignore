@@ -147,3 +147,28 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# --- Power Apps code app ---
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Real app/environment/connection IDs (see power.config.example.json)
+power.config.json
+
+# Local working notes and probe scripts (contain tenant/environment IDs)
+memory-bank.md
+scripts/
+
+# Local Claude settings
+.claude/
