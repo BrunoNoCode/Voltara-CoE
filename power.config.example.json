@@ -1,0 +1,75 @@
+{
+  "version": "1.0",
+  "appId": "00000000-0000-0000-0000-000000000000",
+  "appDisplayName": "Power Platform Monitor",
+  "region": "prod",
+  "appType": "CodeApp",
+  "environmentId": "00000000-0000-0000-0000-000000000000",
+  "description": " ",
+  "buildPath": "./dist",
+  "buildEntryPoint": "index.html",
+  "localAppUrl": "http://localhost:3000",
+  "logoPath": "Default",
+  "connectionReferences": {
+    "00000000-0000-0000-0000-000000000001": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_powerplatformforadmins",
+      "displayName": "Power Platform for Admins",
+      "dataSources": [
+        "powerplatformforadmins"
+      ],
+      "dataSets": {}
+    },
+    "00000000-0000-0000-0000-000000000002": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_powerplatformadminv2",
+      "displayName": "Power Platform for Admins V2",
+      "dataSources": [
+        "powerplatformadminv2"
+      ],
+      "authenticationType": "oauth2-auth",
+      "dataSets": {}
+    },
+    "00000000-0000-0000-0000-000000000003": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+      "displayName": "Microsoft Dataverse",
+      "dataSources": [
+        "commondataserviceforapps"
+      ],
+      "dataSets": {}
+    },
+    "00000000-0000-0000-0000-000000000004": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_office365groups",
+      "displayName": "Office 365 Groups",
+      "dataSources": [
+        "office365groups"
+      ],
+      "dataSets": {}
+    },
+    "00000000-0000-0000-0000-000000000005": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_office365",
+      "displayName": "Office 365 Outlook",
+      "dataSources": [
+        "office365"
+      ],
+      "dataSets": {}
+    },
+    "00000000-0000-0000-0000-000000000006": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_powerappsforadmins",
+      "displayName": "Power Apps for Admins",
+      "dataSources": [
+        "powerappsforadmins"
+      ],
+      "dataSets": {}
+    },
+    "00000000-0000-0000-0000-000000000007": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_webcontents",
+      "displayName": "HTTP with Microsoft Entra ID (preauthorized)",
+      "dataSources": [
+        "webcontents"
+      ],
+      "authenticationType": "EntraAuth",
+      "sharedConnectionId": "/providers/Microsoft.PowerApps/apis/shared_webcontents/connections/00000000000000000000000000000000",
+      "dataSets": {}
+    }
+  },
+  "databaseReferences": {}
+}
