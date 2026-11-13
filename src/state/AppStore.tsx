@@ -20,7 +20,7 @@ import {
 import { applyEnvMeta, saveEnvMeta } from '../data/liveEnvironments';
 import { initResourceCache } from '../data/resourceCache';
 import type { Environment, Resource, Tag } from '../data/types';
-import { setHideSystem } from '../lib/hideSystem';
+import { setHiddenOwners, setHideSystem } from '../lib/hideSystem';
 import { applyRuleTags } from '../lib/tagRules';
 import { mergeTags, writeStoredTags, type SettingsFile } from '../lib/settingsTransfer';
 
@@ -103,7 +103,7 @@ interface Store extends Snapshot {
   /** Replaces fields of one tag (e.g. refreshed group members). */
   updateTag: (id: string, change: Partial<Omit<Tag, 'id'>>) => void;
   deleteTag: (id: string) => void;
-  /** Applies an exported settings file (tags, environment settings, hide-SYSTEM preference). */
+  /** Applies an exported settings file (tags, environment settings, hide-MSFT-owned preference and owner list). */
   importSettings: (file: SettingsFile) => ImportSummary;
 }
 
@@ -456,6 +456,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       }
       setData((d) => ({ ...d, environments: applyEnvMeta(d.environments) }));
       setHideSystem(file.hideSystem);
+      if (file.hiddenOwners) setHiddenOwners(file.hiddenOwners);
       const known = new Set(dataRef.current.environments.map((e) => e.id));
       return { tagsAdded, tagsUpdated, environments: envIds.length, unknownEnvironments: envIds.filter((id) => !known.has(id)).length };
     },

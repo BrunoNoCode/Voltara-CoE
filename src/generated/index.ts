@@ -9,7 +9,6 @@ export * as MicrosoftDataverseModel from './models/MicrosoftDataverseModel';
 export * as Office365GroupsModel from './models/Office365GroupsModel';
 export * as Office365OutlookModel from './models/Office365OutlookModel';
 export * as PowerAppsforAdminsModel from './models/PowerAppsforAdminsModel';
-export * as PowerPlatformforAdminsModel from './models/PowerPlatformforAdminsModel';
 export * as PowerPlatformforAdminsV2Model from './models/PowerPlatformforAdminsV2Model';
 
 // Services
@@ -18,5 +17,4 @@ export * from './services/MicrosoftDataverseService';
 export * from './services/Office365GroupsService';
 export * from './services/Office365OutlookService';
 export * from './services/PowerAppsforAdminsService';
-export * from './services/PowerPlatformforAdminsService';
 export * from './services/PowerPlatformforAdminsV2Service';

@@ -422,9 +422,9 @@ export function ActionCenter() {
                           <strong>{r.name}</strong>
                           {r.description && <div className="small muted wrap">{r.description}</div>}
                         </td>
-                        <td className="wrap">
-                          <div>{describeScope(r, environments)}</div>
-                          <div className="small muted">{describeConditions(r)}</div>
+                        <td className="wrap trigger-cell" title={`${describeScope(r, environments)}\n${describeConditions(r)}`}>
+                          <div className="clamp-2">{describeScope(r, environments)}</div>
+                          <div className="small muted clamp-2">{describeConditions(r)}</div>
                         </td>
                         <td>
                           <span className={`pill ${r.action.kind === 'delete' ? 'pill-bad' : 'pill-no'}`}>{ACTION_DEFS[r.action.kind].label}</span>

@@ -34,8 +34,14 @@ let hostedPromise: Promise<boolean> | null = null;
 export function isHosted(): Promise<boolean> {
   hostedPromise ??= Promise.race([
     getContext().then(() => true),
-    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2000)),
-  ]).catch(() => false);
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 6000)),
+  ])
+    .catch(() => false)
+    .then((hosted) => {
+      // A slow host must not lock the session into demo mode: only a positive answer is cached.
+      if (!hosted) hostedPromise = null;
+      return hosted;
+    });
   return hostedPromise;
 }
 
@@ -83,17 +89,28 @@ export interface CurrentUser {
   upn?: string;
 }
 
-// Uses the Power Apps host context when running inside the player; falls back
-// to a placeholder when running locally outside the host.
+const isLocalDev = () => ['localhost', '127.0.0.1'].includes(window.location.hostname);
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Reads the signed-in user from the Power Apps host context. The host can be slow to
+ * answer, so it is retried with growing timeouts; inside the player it keeps retrying
+ * (the UI shows "Loading User.." meanwhile) and never falls back to a placeholder.
+ * Only a local dev server without a host gets the "Contoso User" placeholder.
+ */
 export async function getCurrentUser(): Promise<CurrentUser> {
-  try {
-    const ctx = await Promise.race([
-      getContext(),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000)),
-    ]);
-    if (ctx.user.fullName) return { fullName: ctx.user.fullName, upn: ctx.user.userPrincipalName };
-  } catch {
-    // not hosted in Power Apps
+  const local = isLocalDev();
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const ctx = await Promise.race([
+        getContext(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), Math.min(3000 + attempt * 2000, 15000))),
+      ]);
+      if (ctx.user.fullName) return { fullName: ctx.user.fullName, upn: ctx.user.userPrincipalName };
+    } catch {
+      // host not answering (yet)
+    }
+    if (local && attempt >= 1) return { fullName: 'Contoso User' };
+    await sleep(Math.min(1000 * (attempt + 1), 10000));
   }
-  return { fullName: 'Alex Silva' };
 }

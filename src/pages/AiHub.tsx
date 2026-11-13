@@ -9,6 +9,7 @@ import { downloadCsv, fmtAgo, fmtDateTime, fmtNumber, TYPE_COLOR } from '../lib/
 import { clickableRow } from '../lib/clickableRow';
 import { isSystemOwned, useHideSystem } from '../lib/hideSystem';
 import { isInAiHub, useAiHubOverrides } from '../lib/aiHubEnvs';
+import { AGENTS_REFRESHED_KEY } from '../lib/aiHubSync';
 import {
   AI_TYPES,
   convert,
@@ -114,7 +115,6 @@ interface AgentsRefreshed {
   synced?: string;
   consumption?: string;
 }
-const AGENTS_REFRESHED_KEY = 'ppm.aiHub.agentsRefreshedAt';
 const readAgentsRefreshed = (): AgentsRefreshed => {
   try {
     return JSON.parse(localStorage.getItem(AGENTS_REFRESHED_KEY) ?? '{}') as AgentsRefreshed;
@@ -512,7 +512,7 @@ export function AiHub() {
     [aiResources, usageFor, consumptionFor, billing, flowAi, thresholds, priceFor, prepaidPrice, envName],
   );
 
-  /** Report lines whose resource is not among the listed agents / agent flows (deleted, renamed, system-owned, other kinds). */
+  /** Report lines whose resource is not among the listed agents / agent flows (deleted, renamed, MSFT-owned, other kinds). */
   const unmatched = useMemo(() => {
     const listed = new Set(aiResources.flatMap((r) => [`${r.envId}:${r.id.toLowerCase()}`, `${r.envId}:name:${r.name.trim().toLowerCase()}`]));
     const out: { envId: string; envName: string; id: string; credits: ResourceCredits }[] = [];
@@ -559,7 +559,7 @@ export function AiHub() {
         if (r && r.envId !== envId) otherEnv++;
         else if (r) {
           otherType++;
-          const k = AI_TYPES.has(r.type) ? `${r.type} (hidden: system-owned)` : r.type;
+          const k = AI_TYPES.has(r.type) ? `${r.type} (hidden: MSFT-owned)` : r.type;
           otherTypes.set(k, (otherTypes.get(k) ?? 0) + 1);
         } else if (v.consumed > 0 && samples.length < 5) samples.push(`${envName.get(envId) ?? envId}: ${id} (${fmtCredits(v.consumed)})`);
       }
@@ -1191,7 +1191,7 @@ export function AiHub() {
               <details>
                 <summary className="muted">
                   {unmatched.length} resource{unmatched.length === 1 ? '' : 's'} with credits not matched to the list above ({fmtCredits(unmatched.reduce((s, u) => s + u.credits.consumed, 0))}{' '}
-                  credits: deleted, renamed, system-owned or other kinds)
+                  credits: deleted, renamed, MSFT-owned or other kinds)
                 </summary>
                 <table className="table">
                   <thead>

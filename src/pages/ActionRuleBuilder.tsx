@@ -535,7 +535,7 @@ function TriggerStep({
 
       <label className="row" style={{ gap: 8, cursor: 'pointer' }}>
         <input type="checkbox" className="check" checked={rule.excludeSystem} onChange={() => update({ excludeSystem: !rule.excludeSystem })} />
-        <span>Exclude SYSTEM-owned resources</span>
+        <span>Exclude MSFT-owned resources</span>
       </label>
     </div>
   );
@@ -943,7 +943,7 @@ function ReviewStep({ rule, plan, activeJob, loaded, sync }: { rule: ActionRule;
           <div className="small muted">Trigger</div>
           <strong>{describeScope(rule, environments)}</strong>
           <div className="small">{describeConditions(rule)}</div>
-          {rule.excludeSystem && <div className="small muted">SYSTEM-owned resources excluded</div>}
+          {rule.excludeSystem && <div className="small muted">MSFT-owned resources excluded</div>}
         </div>
         <div>
           <div className="small muted">Action</div>

@@ -1,7 +1,7 @@
 {
   "version": "1.0",
   "appId": "00000000-0000-0000-0000-000000000000",
-  "appDisplayName": "Power Platform Monitor",
+  "appDisplayName": "Voltara CoE",
   "region": "prod",
   "appType": "CodeApp",
   "environmentId": "00000000-0000-0000-0000-000000000000",
@@ -11,14 +11,6 @@
   "localAppUrl": "http://localhost:3000",
   "logoPath": "Default",
   "connectionReferences": {
-    "00000000-0000-0000-0000-000000000001": {
-      "id": "/providers/Microsoft.PowerApps/apis/shared_powerplatformforadmins",
-      "displayName": "Power Platform for Admins",
-      "dataSources": [
-        "powerplatformforadmins"
-      ],
-      "dataSets": {}
-    },
     "00000000-0000-0000-0000-000000000002": {
       "id": "/providers/Microsoft.PowerApps/apis/shared_powerplatformadminv2",
       "displayName": "Power Platform for Admins V2",

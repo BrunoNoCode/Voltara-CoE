@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AppWindow, Bot, Boxes, Database, Layers, Play, RefreshCw, Workflow } from 'lucide-react';
 import { useStore } from '../state/AppStore';
@@ -10,6 +10,8 @@ import { useTable } from '../lib/useTable';
 import { DonutChart } from '../components/DonutChart';
 import { TYPE_GROUPS, fmtMinutesAgo, fmtNumber, groupOf } from '../lib/format';
 import { isSystemOwned, useHideSystem } from '../lib/hideSystem';
+import { syncAiHub } from '../lib/aiHubSync';
+import { isHosted } from '../data/api';
 import type { HealthStatus, Resource } from '../data/types';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -42,7 +44,8 @@ export function Home() {
   const { environments, resources, resourceLoads, resourceSync, user, showCachedResources, syncAllEnvironments, syncMonitoredResources } = useStore();
   const [hideSystem] = useHideSystem();
   const navigate = useNavigate();
-  const [syncingEnvs, setSyncingEnvs] = useState(false);
+  /** Current "Sync all" step ('' when idle). */
+  const [step, setStep] = useState('');
   const [toast, setToast] = useState('');
   // Clock for the "last 24 hours" activity list, ticking every minute.
   const [now, setNow] = useState(() => Date.now());
@@ -55,17 +58,30 @@ export function Home() {
   const monitoredIds = useMemo(() => environments.filter((e) => e.monitored).map((e) => e.id), [environments]);
   useEffect(() => showCachedResources(monitoredIds), [monitoredIds, showCachedResources]);
 
+  // Latest lists, read by "Sync all" after each step re-rendered the page (its closure has the old ones).
+  const latest = useRef({ environments, resources });
+  useLayoutEffect(() => {
+    latest.current = { environments, resources };
+  }, [environments, resources]);
+
   const syncAll = async () => {
-    setSyncingEnvs(true);
+    setStep('Environment list');
     try {
       await syncAllEnvironments();
-      setSyncingEnvs(false);
+      setStep('Resources of the monitored environments');
       const { total, failed } = await syncMonitoredResources(true);
-      setToast(failed ? `Synced ${total - failed} of ${total} monitored environments (${failed} failed)` : `Synced ${total} monitored environment${total === 1 ? '' : 's'}`);
+      const parts = [failed ? `${total - failed} of ${total} environments synced (${failed} failed)` : `${total} environment${total === 1 ? '' : 's'} synced`];
+      if (await isHosted()) {
+        // Environments included in the AI Hub are known once the synced resources are rendered: wait for that commit.
+        await new Promise((r) => setTimeout(r, 0));
+        const hub = await syncAiHub(latest.current.environments, latest.current.resources, setStep);
+        parts.push(`AI Hub refreshed (${hub} environment${hub === 1 ? '' : 's'})`);
+      }
+      setToast(parts.join(' · '));
     } catch (err) {
       setToast(`Sync failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      setSyncingEnvs(false);
+      setStep('');
     }
   };
 
@@ -109,7 +125,12 @@ export function Home() {
   const firstName = (user.fullName || '').split(' ')[0];
   const anyLoading = stats.monitored.some((e) => resourceLoads[e.id]?.state === 'loading' || resourceLoads[e.id]?.refreshing);
   const summary = resourceSyncSummary(stats.monitored, resourceLoads);
-  const busy = syncingEnvs || !!resourceSync;
+  const busy = !!step || !!resourceSync;
+  const progress = step
+    ? `Syncing: ${step}${resourceSync ? ` (${resourceSync.total - resourceSync.done} of ${resourceSync.total} environments left)` : ''}…`
+    : resourceSync
+      ? `Syncing resources (${resourceSync.total - resourceSync.done} of ${resourceSync.total} environments left)…`
+      : 'Re-load the environment list, the resources of all monitored environments, and the AI Hub list and consumption (Azure groups are not synced).';
 
   return (
     <>
@@ -135,10 +156,13 @@ export function Home() {
         </div>
         <div className="spacer" />
         <div className="sync-box">
-          <button className="btn" onClick={syncAll} disabled={busy} title={`Re-load the environment list and the resources of all monitored environments.\n${summary.title}`}>
-            <RefreshCw size={15} className={busy ? 'spin' : ''} />
-            {syncingEnvs ? 'Syncing environment list…' : resourceSync ? `Syncing resources (${resourceSync.total - resourceSync.done} left)…` : 'Sync all'}
-          </button>
+          {/* The title shows on hover even while the button is disabled: it carries the step details. */}
+          <span title={`${progress}\n${summary.title}`}>
+            <button className="btn" onClick={syncAll} disabled={busy}>
+              <RefreshCw size={15} className={busy ? 'spin' : ''} />
+              {busy ? 'Syncing…' : 'Sync all'}
+            </button>
+          </span>
           <SyncInfo at={summary.latest} oldest={summary.oldest} missing={summary.missing} title={summary.title} />
         </div>
       </div>

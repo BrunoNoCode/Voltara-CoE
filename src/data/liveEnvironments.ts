@@ -1,30 +1,17 @@
-// Live environment inventory from the "Power Platform for Admins" connector,
+// Live environment inventory from the "Power Platform for Admins V2" connector,
 // with a browser-side cache (stale-while-revalidate) and monitor metadata kept
 // in localStorage. Nothing is stored in Dataverse.
-import { PowerPlatformforAdminsService } from '../generated/services/PowerPlatformforAdminsService';
 import { PowerPlatformforAdminsV2Service } from '../generated/services/PowerPlatformforAdminsV2Service';
-import type { Environment as AdminEnvironment } from '../generated/models/PowerPlatformforAdminsModel';
-import type { Clause, ResourceQueryResponse } from '../generated/models/PowerPlatformforAdminsV2Model';
+import type { Clause, EnvironmentList, EnvironmentResponse, ResourceQueryResponse } from '../generated/models/PowerPlatformforAdminsV2Model';
 import type { EnvType, Environment } from './types';
 
-const API_VERSION = '2021-04-01';
+const ENV_API_VERSIONS = ['2022-03-01-preview', '2024-10-01'];
 const GROUPS_API_VERSIONS = ['2022-03-01-preview', '2024-10-01'];
 const GROUP_NAMES_KEY = 'ppm.envGroupNames.v1';
 const CACHE_KEY = 'ppm.environments.v1';
 const META_KEY = 'ppm.envMeta.v1';
 const PAGE_TIMEOUT_MS = 30_000;
 const MAX_PAGES = 50;
-
-// Fields returned by newer api-versions that the generated model does not declare.
-type RawEnvironment = AdminEnvironment & {
-  properties?: NonNullable<AdminEnvironment['properties']> & {
-    description?: string;
-    governanceConfiguration?: { protectionLevel?: string };
-    linkedEnvironmentMetadata?: { securityGroupId?: string; instanceUrl?: string; resourceId?: string; instanceState?: string };
-    // Power Platform environment group the environment belongs to (managed environments only).
-    parentEnvironmentGroup?: { id?: string; displayName?: string; name?: string };
-  };
-};
 
 /** Monitor-specific fields that the connector does not know about. The group comes from the API. */
 export interface EnvMeta {
@@ -119,45 +106,38 @@ export function applyEnvMeta(environments: Environment[]): Environment[] {
   });
 }
 
-function mapType(raw: RawEnvironment): EnvType {
-  const p = raw.properties;
-  if (p?.isDefault) return 'Default';
-  const sku = (p?.environmentSku ?? '').toLowerCase();
+function mapType(type: string | undefined): EnvType {
+  const sku = (type ?? '').toLowerCase();
   if (sku === 'production') return 'Production';
   if (sku === 'developer') return 'Developer';
   if (sku === 'default') return 'Default';
   return 'Sandbox'; // Sandbox, Trial, Teams and other SKUs
 }
 
-function mapEnvironment(raw: RawEnvironment): Environment | null {
-  const id = raw.name;
-  const p = raw.properties;
-  if (!id || !p) return null;
-  const linked = p.linkedEnvironmentMetadata;
-  const location = raw.location ?? '';
-  const ready = (p.provisioningState ?? 'Succeeded') === 'Succeeded' && (!linked?.instanceState || linked.instanceState === 'Ready');
-  const protection = p.governanceConfiguration?.protectionLevel;
-  const envGroup = p.parentEnvironmentGroup;
+function mapEnvironment(e: EnvironmentResponse): Environment | null {
+  const id = e.id?.split('/').pop();
+  if (!id) return null;
+  const geo = e.geo ?? '';
   return {
     id,
-    name: p.displayName || id,
-    type: mapType(raw),
-    region: REGIONS[location.toLowerCase()] ?? (location || p.azureRegionHint || 'Unknown'),
+    name: e.displayName || id,
+    type: mapType(e.type),
+    region: REGIONS[geo.toLowerCase()] ?? (geo || e.azureRegion || 'Unknown'),
     flags: [],
-    managed: !!protection && protection !== 'Basic',
-    // The response usually only carries the group ID; the name is resolved in fetchLiveEnvironments.
-    group: envGroup?.displayName || envGroup?.name || envGroup?.id || '',
-    groupId: envGroup?.id,
-    // Health scoring is not implemented yet; surface provisioning problems only.
-    status: ready ? 'Healthy' : 'Warning',
-    created: p.createdTime ?? '',
+    managed: !!e.protectionLevel && e.protectionLevel !== 'Basic',
+    // The response only carries the group ID; the name is resolved in fetchLiveEnvironments.
+    group: e.environmentGroupId ?? '',
+    groupId: e.environmentGroupId || undefined,
+    // Health scoring is not implemented yet; surface non-enabled states only.
+    status: !e.state || e.state === 'Enabled' ? 'Healthy' : 'Warning',
+    created: e.createdDateTime ?? '',
     lastSynced: '',
-    lastActivity: p.lastModifiedTime ?? p.createdTime ?? '',
-    url: linked?.instanceUrl ?? '',
-    organizationId: linked?.resourceId ?? '',
-    securityGroup: linked?.securityGroupId ? { id: linked.securityGroupId, name: linked.securityGroupId } : undefined,
+    // V2 has no last-modified time.
+    lastActivity: e.createdDateTime ?? '',
+    url: e.url ?? '',
+    organizationId: e.dataverseId ?? '',
+    securityGroup: e.securityGroupId ? { id: e.securityGroupId, name: e.securityGroupId } : undefined,
     monitored: false,
-    description: p.description,
   };
 }
 
@@ -165,10 +145,10 @@ export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Connector call timed out')), ms))]);
 }
 
-function skipTokenOf(nextLink: string | undefined): string | undefined {
-  if (!nextLink) return undefined;
+function skipOf(nextLink: string): number | undefined {
   try {
-    return new URL(nextLink).searchParams.get('$skiptoken') ?? undefined;
+    const skip = Number(new URL(nextLink).searchParams.get('$skip'));
+    return Number.isFinite(skip) && skip > 0 ? skip : undefined;
   } catch {
     return undefined;
   }
@@ -225,7 +205,6 @@ export const cachedEnvGroupName = (id: string | undefined) => (id ? cachedGroupN
 
 const INVENTORY_API_VERSION = '2024-10-01';
 const ENV_GROUP_TYPE = 'microsoft.powerplatform/environmentgroups';
-const GROUP_EXPAND = 'properties.parentEnvironmentGroup';
 
 const shortId = (id: string | undefined) => (id ?? '').split('/').pop()?.toLowerCase() ?? '';
 
@@ -278,38 +257,6 @@ function groupNamesFromInventory(): Promise<Record<string, string>> {
   return inventoryPromise;
 }
 
-/** Harvests parentEnvironmentGroup display names from raw admin environments. */
-function groupNamesOfEnvironments(raws: RawEnvironment[]): Record<string, string> {
-  const names: Record<string, string> = {};
-  for (const raw of raws) {
-    const g = raw.properties?.parentEnvironmentGroup;
-    const id = shortId(g?.id || g?.name);
-    if (id && g?.displayName && g.displayName.toLowerCase() !== id) names[id] = g.displayName;
-  }
-  return names;
-}
-
-/** Admin environment list with $expand=properties.parentEnvironmentGroup. Memoized per session. */
-let expandedPromise: Promise<Record<string, string>> | undefined;
-function groupNamesFromExpandedEnvironments(): Promise<Record<string, string>> {
-  expandedPromise ??= (async () => {
-    const raws: RawEnvironment[] = [];
-    let skipToken: string | undefined;
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const result = await withTimeout(PowerPlatformforAdminsService.Get_AdminEnvironment(API_VERSION, skipToken, undefined, GROUP_EXPAND), PAGE_TIMEOUT_MS);
-      if (!result.success) throw result.error ?? new Error('Get-AdminEnvironment failed');
-      raws.push(...((result.data?.value ?? []) as RawEnvironment[]));
-      skipToken = skipTokenOf(result.data?.nextLink);
-      if (!skipToken) break;
-    }
-    const names = groupNamesOfEnvironments(raws);
-    if (!Object.keys(names).length) throw new Error('no group display names in the response');
-    return names;
-  })();
-  expandedPromise.catch(() => (expandedPromise = undefined));
-  return expandedPromise;
-}
-
 /** ListEnvironmentGroups on each api-version until one answers. */
 async function groupNamesFromList(): Promise<Record<string, string>> {
   const errors: string[] = [];
@@ -355,17 +302,16 @@ async function groupNamesFromGet(ids: string[]): Promise<Record<string, string>>
 
 /**
  * Resolves environment group display names, trying each source in order until every ID is known:
- * inventory query, expanded environment list, ListEnvironmentGroups, GetEnvironmentGroup.
+ * inventory query, ListEnvironmentGroups, GetEnvironmentGroup.
  * Results are cached in localStorage; failures are not.
  */
-async function resolveGroupNames(groupIds: string[], opts: { skipExpanded?: boolean } = {}): Promise<Map<string, string>> {
+async function resolveGroupNames(groupIds: string[]): Promise<Map<string, string>> {
   const map = new Map<string, string>(Object.entries(cachedGroupNames()));
   const wanted = [...new Set(groupIds.map(shortId))].filter(Boolean);
   const missing = () => wanted.filter((id) => !map.has(id));
   if (!missing().length) return map;
   const sources: [string, () => Promise<Record<string, string>>][] = [
     ['Inventory query', groupNamesFromInventory],
-    ...(opts.skipExpanded ? [] : ([['Environments $expand', groupNamesFromExpandedEnvironments]] as [string, () => Promise<Record<string, string>>][])),
     ['ListEnvironmentGroups', groupNamesFromList],
     ['GetEnvironmentGroup', () => groupNamesFromGet(missing())],
   ];
@@ -399,31 +345,43 @@ export async function fetchEnvironmentGroupName(groupId: string): Promise<{ name
 export const ppacEnvironmentUrl = (envId: string) => `https://admin.powerplatform.microsoft.com/manage/environments/environment/${envId}/hub`;
 export const ppacEnvironmentGroupUrl = (groupId: string) => `https://admin.powerplatform.microsoft.com/manage/environmentGroups/${groupId}`;
 
-/** Fetches every environment the signed-in user can see as an admin, following paging. */
+/** ListEnvironmentsForUser on one api-version, following @odata.nextLink / $skip paging. */
+async function loadEnvironments(version: string): Promise<EnvironmentResponse[]> {
+  const envs: EnvironmentResponse[] = [];
+  let skip: number | undefined;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const result = await withTimeout(PowerPlatformforAdminsV2Service.ListEnvironmentsForUser(version, undefined, undefined, undefined, skip), PAGE_TIMEOUT_MS);
+    if (!result.success) throw result.error ?? new Error('ListEnvironmentsForUser failed');
+    const data = unwrapData(result.data) as (EnvironmentList & { '@odata.nextLink'?: string }) | null;
+    const rows = data?.value ?? [];
+    envs.push(...rows);
+    const next = data?.['@odata.nextlink'] ?? data?.['@odata.nextLink'];
+    if (!next || !rows.length) break;
+    skip = skipOf(next) ?? envs.length;
+  }
+  return envs;
+}
+
+/** Fetches every environment the signed-in user can see, trying each api-version until one answers. */
 export async function fetchLiveEnvironments(): Promise<Environment[]> {
-  const load = async (expand?: string) => {
-    const raws: RawEnvironment[] = [];
-    let skipToken: string | undefined;
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const result = await withTimeout(PowerPlatformforAdminsService.Get_AdminEnvironment(API_VERSION, skipToken, undefined, expand), PAGE_TIMEOUT_MS);
-      if (!result.success) throw result.error ?? new Error('Get-AdminEnvironment failed');
-      raws.push(...((result.data?.value ?? []) as RawEnvironment[]));
-      skipToken = skipTokenOf(result.data?.nextLink);
-      if (!skipToken) break;
+  let raws: EnvironmentResponse[] | undefined;
+  const errors: string[] = [];
+  for (const version of ENV_API_VERSIONS) {
+    try {
+      raws = await loadEnvironments(version);
+      break;
+    } catch (err) {
+      errors.push(`(${version}): ${errorText(err)}`);
     }
-    return raws;
-  };
-  // Ask for the parent environment group to be expanded (gives its display name); retry plain if refused.
-  let expanded = true;
-  const raws = await load(GROUP_EXPAND).catch(() => {
-    expanded = false;
-    return load();
-  });
-  cacheGroupNames(groupNamesOfEnvironments(raws));
-  const out = raws.map(mapEnvironment).filter((e): e is Environment => e !== null);
+  }
+  if (!raws) throw new Error(`ListEnvironmentsForUser failed ${errors.join(', ')}`);
+  const seen = new Set<string>();
+  const out = raws
+    .map(mapEnvironment)
+    .filter((e): e is Environment => e !== null && !seen.has(e.id.toLowerCase()) && !!seen.add(e.id.toLowerCase()));
   // Group names are a nice-to-have: if the lookup fails, the group ID is shown instead.
   const groupIds = out.map((e) => e.groupId).filter((id): id is string => !!id);
-  const names = await resolveGroupNames(groupIds, { skipExpanded: expanded }).catch(() => new Map<string, string>());
+  const names = await resolveGroupNames(groupIds).catch(() => new Map<string, string>());
   for (const e of out) {
     const name = e.groupId && names.get(e.groupId.toLowerCase());
     if (name) e.group = name;
