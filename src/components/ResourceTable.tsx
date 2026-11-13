@@ -229,9 +229,9 @@ export function ResourceTable({ rows: allRows, showEnvironment = false, initialQ
           {showLicense && <FilterSelect label="License" value={license} onChange={setLicense} options={['Premium', 'Standard']} />}
           <FilterSelect label="Tag" value={tag} onChange={setTag} options={tagNames} />
           <FilterSelect label="Status" value={status} onChange={setStatus} options={statuses} />
-          <label className="hide-system" title="Hide resources owned by the Dataverse SYSTEM user">
+          <label className="hide-system" title="Hide resources owned by Microsoft accounts (SYSTEM, Microsoft Corporation, …). The list is configured on the Settings page.">
             <input type="checkbox" checked={hideSystem} onChange={(e) => setHideSystem(e.target.checked)} />
-            Hide SYSTEM-owned{systemCount ? ` (${fmtNumber(systemCount)})` : ''}
+            Hide MSFT-owned{systemCount ? ` (${fmtNumber(systemCount)})` : ''}
           </label>
           {hasCustomInfo && (
             <label className="hide-system" title="Show only custom Dataverse tables (IsCustomEntity)">

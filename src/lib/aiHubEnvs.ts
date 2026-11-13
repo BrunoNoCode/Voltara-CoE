@@ -34,7 +34,7 @@ function subscribe(cb: () => void) {
 
 /**
  * Default when there is no explicit choice: the environment contains AI Models, Copilot Studio agents or agent flows.
- * SYSTEM-owned resources don't count — every Dataverse environment ships prebuilt AI Builder models owned by SYSTEM.
+ * MSFT-owned resources (see hideSystem.ts) don't count — every Dataverse environment ships prebuilt AI Builder models owned by SYSTEM.
  */
 export const hasAiResources = (envId: string, resources: Resource[]) =>
   resources.some((r) => r.envId === envId && AI_HUB_TYPES.has(r.type) && !isSystemOwned(r));

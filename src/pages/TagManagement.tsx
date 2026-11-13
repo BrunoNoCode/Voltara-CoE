@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeftRight, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { ArrowLeftRight, Pencil, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { useStore } from '../state/AppStore';
 import { FlagChip, RowMenu, SidePanel, SortTh, Tabs, Toast, Toggle, Pagination, type MenuItem } from '../components/ui';
 import { useTable } from '../lib/useTable';
@@ -13,10 +13,11 @@ import type { Tag } from '../data/types';
 type Kind = Tag['kind'];
 
 export function TagManagement() {
-  const { tags, resources, environments, createTag, toggleTag, updateTag, deleteTag } = useStore();
+  const { tags, resources, environments, createTag, toggleTag, updateTag, deleteTag, setEnvironmentFlags } = useStore();
   const [kind, setKind] = useState<Kind>('resource');
   const [q, setQ] = useState('');
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Tag>();
   const [toast, setToast] = useState('');
 
   const rows = useMemo(() => {
@@ -164,6 +165,7 @@ export function TagManagement() {
                   <td>
                     <RowMenu
                       items={[
+                        { label: 'Edit', icon: <Pencil size={14} />, onClick: () => setEditing(t) },
                         ...(hasGroups(t)
                           ? [{ label: 'Sync group members', icon: <RefreshCw size={14} />, onClick: () => void syncGroups([t], t.id) } satisfies MenuItem]
                           : []),
@@ -207,6 +209,24 @@ export function TagManagement() {
           };
           return isFlag ? <CreateFlagPanel {...props} /> : <CreateResourceTagPanel {...props} />;
         })()}
+      {editing &&
+        (() => {
+          const tag = editing;
+          const props = {
+            initial: tag,
+            existing: tags.filter((t) => t.id !== tag.id).map((t) => t.name.toLowerCase()),
+            onClose: () => setEditing(undefined),
+            onCreate: (change: Omit<Tag, 'id' | 'resources' | 'active'>) => {
+              updateTag(tag.id, change);
+              // Environments store their flags by name: carry a renamed flag over.
+              if (tag.kind === 'flag' && change.name !== tag.name)
+                for (const e of environments) if (e.flags.includes(tag.name)) setEnvironmentFlags(e.id, e.flags.map((f) => (f === tag.name ? change.name : f)));
+              setEditing(undefined);
+              setToast(`"${change.name}" saved`);
+            },
+          };
+          return tag.kind === 'flag' ? <CreateFlagPanel {...props} /> : <CreateResourceTagPanel {...props} />;
+        })()}
       {toast && <Toast message={toast} onDone={() => setToast('')} />}
     </>
   );
@@ -214,23 +234,26 @@ export function TagManagement() {
 
 function CreateFlagPanel({
   existing,
+  initial,
   onClose,
   onCreate,
 }: {
   existing: string[];
+  /** Flag being edited; omitted when creating a new flag. */
+  initial?: Tag;
   onClose: () => void;
   onCreate: (t: Omit<Tag, 'id' | 'resources' | 'active'>) => void;
 }) {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
+  const [name, setName] = useState(initial?.name ?? '');
+  const [description, setDescription] = useState(initial?.description ?? '');
 
   const trimmed = name.trim();
-  const duplicate = existing.includes(trimmed.toLowerCase());
+  const duplicate = trimmed.toLowerCase() !== initial?.name.toLowerCase() && existing.includes(trimmed.toLowerCase());
   const valid = trimmed.length > 0 && !duplicate;
 
   return (
     <SidePanel
-      title="Create Flag"
+      title={initial ? 'Edit Flag' : 'Create Flag'}
       onClose={onClose}
       footer={
         <>
@@ -242,7 +265,7 @@ function CreateFlagPanel({
             disabled={!valid}
             onClick={() => onCreate({ name: trimmed, description: description.trim(), rule: 'Manual', appliesTo: 'Environments', kind: 'flag' })}
           >
-            Create Flag
+            {initial ? 'Save' : 'Create Flag'}
           </button>
         </>
       }

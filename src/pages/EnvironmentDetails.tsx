@@ -215,7 +215,7 @@ export function EnvironmentDetails() {
   const aiDefault = hasAiResources(id ?? '', allEnvResources);
   const inAiHub = aiHubOverrides[id ?? ''] ?? aiDefault;
   const [aiInfoOpen, setAiInfoOpen] = useState(false);
-  // Counts, stats and charts follow the "Hide SYSTEM-owned" checkbox; the table filters itself.
+  // Counts, stats and charts follow the "Hide MSFT-owned" checkbox; the table filters itself.
   const envResources = useMemo(() => (hideSystem ? allEnvResources.filter((r) => !isSystemOwned(r)) : allEnvResources), [allEnvResources, hideSystem]);
   const groupRows = (list: Resource[]) => {
     const m: Record<string, Resource[]> = Object.fromEntries(TYPE_GROUPS.map((g) => [g.key, []]));
@@ -521,9 +521,6 @@ export function EnvironmentDetails() {
               )}
             </div>
             <div style={{ marginTop: 18, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              <button className="btn" onClick={sync}>
-                <RefreshCw size={16} /> Sync now
-              </button>
               {confirmStop ? (
                 <span className="send-confirm">
                   <strong>Stop monitoring {env.name}?</strong>

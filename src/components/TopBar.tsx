@@ -85,7 +85,7 @@ export function TopBar() {
         <div className="row">
           <div className="avatar">{initials(user.fullName || '?')}</div>
           <div className="user-meta">
-            <div className="name">{user.fullName || '…'}</div>
+            <div className="name">{user.fullName || 'Loading User..'}</div>
             <div className="role">Environment Owner</div>
           </div>
         </div>

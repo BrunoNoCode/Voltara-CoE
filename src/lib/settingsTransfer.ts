@@ -3,7 +3,7 @@
 import { readEnvMeta, readJson, writeJson, type EnvMeta } from '../data/liveEnvironments';
 import type { ConditionField, ConditionOperator, GroupMember, GroupSnapshot, Tag, TagCategory, TagCondition } from '../data/types';
 import { TAG_CATEGORIES } from './tagRules';
-import { readHideSystem } from './hideSystem';
+import { readHiddenOwners, readHideSystem } from './hideSystem';
 import { ACTION_FIELDS, ACTION_KINDS, readActionRules, readEmailLogos, readEmailTemplates, type ActionCondition, type ActionRule, type EmailDesign, type EmailTemplate } from './actions';
 
 const TAGS_KEY = 'ppm.tags.v1';
@@ -21,6 +21,8 @@ export interface SettingsFile {
   tags: Tag[];
   environments: Record<string, PortableEnvMeta>;
   hideSystem: boolean;
+  /** Owners hidden by "Hide MSFT-owned" (absent in files from older versions). */
+  hiddenOwners?: string[];
   /** Action Center rules and e-mail templates (absent in files from older versions). */
   actionRules?: ActionRule[];
   emailTemplates?: EmailTemplate[];
@@ -45,6 +47,7 @@ export function buildSettingsFile(tags: Tag[], exportedBy?: string): SettingsFil
     tags,
     environments,
     hideSystem: readHideSystem(),
+    hiddenOwners: readHiddenOwners(),
     actionRules: readActionRules(),
     emailTemplates: readEmailTemplates(),
     emailLogos: readEmailLogos(),
@@ -111,7 +114,7 @@ export function parseSettingsFile(text: string): SettingsFile {
   } catch {
     throw new Error('The file is not valid JSON.');
   }
-  if (!isObj(raw) || raw.format !== FORMAT) throw new Error('This is not a Power Platform Monitor settings file.');
+  if (!isObj(raw) || raw.format !== FORMAT) throw new Error('This is not a settings file.');
   if (typeof raw.version !== 'number' || raw.version > VERSION) throw new Error('This settings file was made by a newer version of the app.');
 
   const tags: Tag[] = (Array.isArray(raw.tags) ? raw.tags : []).filter(isObj).flatMap((t): Tag[] =>
@@ -153,6 +156,7 @@ export function parseSettingsFile(text: string): SettingsFile {
     tags,
     environments,
     hideSystem: raw.hideSystem !== false,
+    hiddenOwners: isStrArray(raw.hiddenOwners) ? raw.hiddenOwners : undefined,
     actionRules: parseActionRules(raw.actionRules),
     emailTemplates: parseEmailTemplates(raw.emailTemplates),
     emailLogos: parseEmailLogos(raw.emailLogos),

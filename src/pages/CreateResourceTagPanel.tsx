@@ -40,23 +40,27 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : typeof e ===
 
 export function CreateResourceTagPanel({
   existing,
+  initial,
   onClose,
   onCreate,
 }: {
   existing: string[];
+  /** Tag being edited; omitted when creating a new tag. */
+  initial?: Tag;
   onClose: () => void;
   onCreate: (t: Omit<Tag, 'id' | 'resources' | 'active'>) => void;
 }) {
   const { environments, resources } = useStore();
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [all, setAll] = useState(true);
-  const [cats, setCats] = useState<TagCategory[]>([]);
-  const [conditions, setConditions] = useState<TagCondition[]>([]);
-  const [match, setMatch] = useState<'all' | 'any'>('all');
+  const [name, setName] = useState(initial?.name ?? '');
+  const [description, setDescription] = useState(initial?.description ?? '');
+  const initialCats = initial?.categories;
+  const [all, setAll] = useState(!Array.isArray(initialCats));
+  const [cats, setCats] = useState<TagCategory[]>(Array.isArray(initialCats) ? initialCats : []);
+  const [conditions, setConditions] = useState<TagCondition[]>(initial?.conditions ?? []);
+  const [match, setMatch] = useState<'all' | 'any'>(initial?.match ?? 'all');
 
   const trimmed = name.trim();
-  const duplicate = existing.includes(trimmed.toLowerCase());
+  const duplicate = trimmed.toLowerCase() !== initial?.name.toLowerCase() && existing.includes(trimmed.toLowerCase());
   const categories = useMemo<Tag['categories']>(() => (all ? 'all' : TAG_CATEGORIES.map((c) => c.key).filter((k) => cats.includes(k))), [all, cats]);
   const valid = trimmed.length > 0 && !duplicate && (all || cats.length > 0) && conditions.every(isComplete);
 
@@ -95,7 +99,7 @@ export function CreateResourceTagPanel({
 
   return (
     <SidePanel
-      title="Create Tag"
+      title={initial ? 'Edit Tag' : 'Create Tag'}
       onClose={onClose}
       footer={
         <>
@@ -106,7 +110,7 @@ export function CreateResourceTagPanel({
             Cancel
           </button>
           <button className="btn btn-primary" disabled={!valid} onClick={create}>
-            Create Tag
+            {initial ? 'Save' : 'Create Tag'}
           </button>
         </>
       }
@@ -115,6 +119,9 @@ export function CreateResourceTagPanel({
         <label htmlFor="tag-name">Tag name</label>
         <input id="tag-name" className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
         {duplicate && <span className="small" style={{ color: 'var(--bad)' }}>A tag or flag with this name already exists.</span>}
+        {initial && !duplicate && trimmed && trimmed !== initial.name && (
+          <span className="small muted">Action Center rules that use “{initial.name}” in a Tag condition need to be updated to the new name.</span>
+        )}
       </div>
       <div className="field">
         <label htmlFor="tag-desc">Description</label>
