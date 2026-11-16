@@ -8,6 +8,7 @@ export * as HTTPwithMicrosoftEntraID_preauthorized_Model from './models/HTTPwith
 export * as MicrosoftDataverseModel from './models/MicrosoftDataverseModel';
 export * as Office365GroupsModel from './models/Office365GroupsModel';
 export * as Office365OutlookModel from './models/Office365OutlookModel';
+export * as Office365UsersModel from './models/Office365UsersModel';
 export * as PowerAppsforAdminsModel from './models/PowerAppsforAdminsModel';
 export * as PowerPlatformforAdminsV2Model from './models/PowerPlatformforAdminsV2Model';
 
@@ -16,5 +17,6 @@ export * from './services/HTTPwithMicrosoftEntraID_preauthorized_Service';
 export * from './services/MicrosoftDataverseService';
 export * from './services/Office365GroupsService';
 export * from './services/Office365OutlookService';
+export * from './services/Office365UsersService';
 export * from './services/PowerAppsforAdminsService';
 export * from './services/PowerPlatformforAdminsV2Service';
