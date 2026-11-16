@@ -59,7 +59,6 @@
         "webcontents"
       ],
       "authenticationType": "EntraAuth",
-      "sharedConnectionId": "/providers/Microsoft.PowerApps/apis/shared_webcontents/connections/00000000000000000000000000000000",
       "dataSets": {}
     }
   },
