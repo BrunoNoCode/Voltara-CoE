@@ -38,5 +38,5 @@ export function useTable<T>(rows: T[], getters: Record<string, (r: T) => string 
   };
 
   const pageRows = sorted.slice((page - 1) * pageSize, page * pageSize);
-  return { pageRows, total: rows.length, page, setPage, pageSize, sortKey, sortDir, toggleSort };
+  return { sorted, pageRows, total: rows.length, page, setPage, pageSize, sortKey, sortDir, toggleSort };
 }

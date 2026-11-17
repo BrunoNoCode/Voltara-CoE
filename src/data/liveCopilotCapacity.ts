@@ -5,12 +5,14 @@
 import { PowerPlatformforAdminsV2Service } from '../generated/services/PowerPlatformforAdminsV2Service';
 import type { EnvironmentEntitlementResponseModel } from '../generated/models/PowerPlatformforAdminsV2Model';
 import { readJson, writeJson } from './liveEnvironments';
+import { isCurrentMonth, monthCacheKey, monthKey, pruneMonths } from './aiMonths';
 import { errorText } from './liveResourceConsumption';
 import type { Environment } from './types';
 
 const API_VERSION = '2024-10-01';
 const ENTITLEMENT = 'MCSMessages';
 const cacheKey = (envId: string) => `ppm.copilotCapacity.${envId}.v1`;
+const SNAPSHOT = 'ppm.copilotCapacity';
 
 export interface CopilotCapacity {
   savedAt: string;
@@ -30,6 +32,8 @@ export interface CopilotCapacity {
   lastUpdated?: string;
   /** Set when the call failed (e.g. no admin rights). */
   error?: string;
+  /** Past month without a snapshot: consumption summed from the resources, settings from the current month. */
+  estimated?: boolean;
 }
 
 const empty = (): CopilotCapacity => ({ savedAt: new Date().toISOString(), allocated: 0, autoAllocated: 0, consumed: 0, payGo: false, payGoConsumed: 0, tenantPool: false });
@@ -53,8 +57,15 @@ function mapEntitlement(e: EnvironmentEntitlementResponseModel | undefined): Cop
   return out;
 }
 
-export function cachedCopilotCapacity(envId: string): CopilotCapacity | null {
-  return readJson<CopilotCapacity>(cacheKey(envId));
+/**
+ * Cached capacity. Without a month (or for the current month): the latest read. For a past month: the last snapshot
+ * saved during that month (the licensing API only returns the current month), or null when there is none.
+ */
+export function cachedCopilotCapacity(envId: string, month?: string): CopilotCapacity | null {
+  const cur = readJson<CopilotCapacity>(cacheKey(envId));
+  if (!month || isCurrentMonth(month)) return cur;
+  const snap = readJson<CopilotCapacity>(monthCacheKey(SNAPSHOT, envId, month));
+  return snap ?? (cur && !cur.error && monthKey(new Date(cur.savedAt)) === month ? cur : null);
 }
 
 export async function fetchCopilotCapacity(env: Environment): Promise<CopilotCapacity> {
@@ -68,6 +79,11 @@ export async function fetchCopilotCapacity(env: Environment): Promise<CopilotCap
     capacity = { ...empty(), error: errorText(err) };
   }
   writeJson(cacheKey(env.id), capacity);
+  if (!capacity.error) {
+    // Month snapshot, so last month's allocation and consumption stay available next month.
+    writeJson(monthCacheKey(SNAPSHOT, env.id, monthKey()), capacity);
+    pruneMonths(SNAPSHOT);
+  }
   return capacity;
 }
 

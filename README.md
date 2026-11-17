@@ -83,7 +83,12 @@ pa app add data-source --connector <connector-id> --connection-id <connection-id
 
 Connector IDs: `shared_powerplatformadminv2`, `shared_commondataserviceforapps`, `shared_office365groups`, `shared_office365`, `shared_powerappsforadmins`, `shared_webcontents`. Use `pa connector list --search <name>` to confirm them.
 
-The HTTP with Microsoft Entra ID connector - shared_webcontents - should be configured with:.
+The HTTP with Microsoft Entra ID connector - shared_webcontents - should be configured with:
+Base Resource URL: `https://powerva.microsoft.com`
+Microsoft Entra ID Resource URI (Application ID URI): `https://api.powerplatform.com`
+
+> [!WARNING]
+> Please create this connection outside the Code Apps experience - via connections.
 
 ### 5. Build and push
 
@@ -108,6 +113,10 @@ Share the app with `pa app share --principal <emails-or-object-ids>`.
 | `power.config.json` → `appDisplayName` | The app name in Power Apps (maker portal, app list). |
 | [index.html](index.html) → `<title>` | The browser tab title. |
 | [src/config/branding.json](src/config/branding.json) | Brand name, app name, tagline and footer shown in the sidebar. |
+
+
+Additional Setting to hide the Power Apps Header (this updates power.config.json).
+`pa app set-setting --show-header false`
 
 
 ## PRO Tips

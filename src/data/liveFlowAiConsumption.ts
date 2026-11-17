@@ -3,13 +3,12 @@
 // partnerSource "AIBuilder" are counted: agents and agent flows are already covered by the billing summary API.
 // Consumption is eventData.messageConsumption.consumption (msdyn_creditconsumed is always 0). The event payload columns
 // (msdyn_datainfo, msdyn_output) are never read. Read-only; cached per environment in localStorage.
-import { readJson, writeJson } from './liveEnvironments';
 import { errorText } from './liveResourceConsumption';
-import { billingPeriod } from './liveAgentBilling';
+import { monthKey, monthPeriod, readMonth, writeMonth } from './aiMonths';
 import { fetchAllRows, fetchOpen, OWNER_LINK, ownerFields, str, xmlEscape, type Row } from './liveFlows';
 import type { Environment, Resource } from './types';
 
-const cacheKey = (envId: string) => `ppm.flowAiConsumption.${envId}.v1`;
+const CACHE = 'ppm.flowAiConsumption';
 const CONCURRENCY = 3;
 const ID_BATCH = 100;
 const FV = '@OData.Community.Display.V1.FormattedValue';
@@ -45,11 +44,12 @@ export interface FlowAiConsumption {
   byFlow: Record<string, FlowAiEntry>;
 }
 
-export function cachedFlowAiConsumption(envId: string): FlowAiConsumption | null {
-  return readJson<FlowAiConsumption>(cacheKey(envId));
+/** Cached consumption of the month (default: current month). */
+export function cachedFlowAiConsumption(envId: string, month = monthKey()): FlowAiConsumption | null {
+  return readMonth<FlowAiConsumption>(CACHE, envId, month);
 }
 
-const eventsFetch = (since: string) => (page: number, cookie?: string) => `${fetchOpen(page, cookie)}
+const eventsFetch = (since: string, until: string) => (page: number, cookie?: string) => `${fetchOpen(page, cookie)}
   <entity name="msdyn_aievent">
     <attribute name="msdyn_aieventid" />
     <attribute name="msdyn_processingdate" />
@@ -61,6 +61,7 @@ const eventsFetch = (since: string) => (page: number, cookie?: string) => `${fet
     </link-entity>
     <filter type="and">
       <condition attribute="msdyn_processingdate" operator="ge" value="${xmlEscape(since)}" />
+      <condition attribute="msdyn_processingdate" operator="le" value="${xmlEscape(until)}" />
     </filter>
     <order attribute="msdyn_aieventid" />
   </entity>
@@ -108,7 +109,7 @@ function parseEventData(v: unknown): EventData | null {
 const isGuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 
 async function loadEnvironment(env: Environment, period: { start: string; end: string }, log: (line: string) => void): Promise<FlowAiConsumption> {
-  const rows = await fetchAllRows(env.url, 'msdyn_aievents', eventsFetch(period.start));
+  const rows = await fetchAllRows(env.url, 'msdyn_aievents', eventsFetch(period.start, period.end));
   const byRes = new Map<string, FlowAiEntry>();
   let skipped = 0;
   for (const row of rows) {
@@ -176,7 +177,7 @@ async function loadEnvironment(env: Environment, period: { start: string; end: s
   const flows = Object.values(byFlow).sort((x, y) => y.consumed - x.consumed);
   const total = flows.reduce((n, f) => n + f.consumed, 0);
   log(
-    `   ${env.name}: ${rows.length} AI events this month, ${rows.length - skipped} from cloud flows (PowerAutomate/AIBuilder), ` +
+    `   ${env.name}: ${rows.length} AI events in ${period.start.slice(0, 7)},${rows.length - skipped} from cloud flows (PowerAutomate/AIBuilder), ` +
       `${flows.length} flows, ${total.toFixed(2)} credits${agentFlows ? ` (${agentFlows} agent flows skipped)` : ''}`,
   );
   flows.forEach((f) =>
@@ -194,11 +195,15 @@ async function loadEnvironment(env: Environment, period: { start: string; end: s
 const isMissingTable = (msg: string) => /msdyn_aievent|Resource not found for the segment|does not exist|0x80060888|0x80040217/i.test(msg);
 
 /**
- * AI Builder credits per cloud flow this month in the given environments (those with a Dataverse database).
- * Environments without the AI event table are skipped; failures keep the cached data and are logged.
+ * AI Builder credits per cloud flow in the month (yyyy-mm, default: current month) in the given environments (those
+ * with a Dataverse database). Environments without the AI event table are skipped; failures keep the cached data and are logged.
  */
-export async function fetchFlowAiConsumption(environments: Environment[], log: (line: string) => void = () => {}): Promise<Record<string, FlowAiConsumption>> {
-  const period = billingPeriod();
+export async function fetchFlowAiConsumption(
+  environments: Environment[],
+  log: (line: string) => void = () => {},
+  month = monthKey(),
+): Promise<Record<string, FlowAiConsumption>> {
+  const period = monthPeriod(month);
   const targets = environments.filter((e) => e.url);
   const out: Record<string, FlowAiConsumption> = {};
   log(`FetchXML msdyn_aievents (PowerAutomate/AIBuilder) in ${targets.length} environments, ${period.start.slice(0, 10)} → ${period.end.slice(0, 10)}`);
@@ -208,7 +213,7 @@ export async function fetchFlowAiConsumption(environments: Environment[], log: (
       try {
         const c = await loadEnvironment(env, period, log);
         out[env.id] = c;
-        writeJson(cacheKey(env.id), c);
+        writeMonth(CACHE, env.id, month, c);
       } catch (err) {
         const msg = err instanceof Error ? err.message : errorText(err);
         log(`   ${env.name}: ${isMissingTable(msg) ? 'no AI events table (skipped)' : `failed: ${msg.slice(0, 300)}`}`);
