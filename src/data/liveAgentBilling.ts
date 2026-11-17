@@ -4,6 +4,7 @@
 // (Copilot Studio, not Microsoft Copilot powered) are queried. Cached per environment in localStorage.
 import { HTTPwithMicrosoftEntraID_preauthorized_Service } from '../generated/services/HTTPwithMicrosoftEntraID_preauthorized_Service';
 import { readJson, writeJson } from './liveEnvironments';
+import { monthKey, monthPeriod, readMonth, writeMonth } from './aiMonths';
 import { errorText, type ResourceConsumption } from './liveResourceConsumption';
 import type { Environment, Resource } from './types';
 
@@ -128,10 +129,11 @@ async function fetchSummaryBatch(
   return entries;
 }
 
-const summaryCacheKey = (envId: string) => `ppm.agentBillingSummary.${envId}.v1`;
+const SUMMARY_CACHE = 'ppm.agentBillingSummary';
 
-export function cachedAgentBillingSummary(envId: string): ResourceConsumption | null {
-  return readJson<ResourceConsumption>(summaryCacheKey(envId));
+/** Cached billing summary of the month (default: current month). */
+export function cachedAgentBillingSummary(envId: string, month = monthKey()): ResourceConsumption | null {
+  return readMonth<ResourceConsumption>(SUMMARY_CACHE, envId, month);
 }
 
 /**
@@ -170,7 +172,7 @@ function sumEntries(entries: SummaryEntry[]): Summed {
 
 /**
  * Consumed Copilot Credits of every agent (Standard and MSFT Copilot) and agent flow in the given environments for the
- * current month, from POST .../agent-ops/billing/summary (50 ids per call). Agents are requested with target type 'agent';
+ * month (yyyy-mm, default: current month), from POST .../agent-ops/billing/summary (50 ids per call). Agents are requested with target type 'agent';
  * agent flows in an extra request with the first accepted FLOW_TYPES value (its failure is only logged). Entries are matched on cdsBotId only and
  * summed; across the two requests the larger value per id is kept so an id returned by both is not counted twice.
  * Resources without an entry get 0. Environments whose agent call fails keep their cached data.
@@ -179,8 +181,9 @@ export async function fetchAgentBillingSummary(
   environments: Environment[],
   resources: Resource[],
   log: (line: string) => void = () => {},
+  month = monthKey(),
 ): Promise<Record<string, ResourceConsumption>> {
-  const period = billingPeriod();
+  const period = monthPeriod(month);
   const out: Record<string, ResourceConsumption> = {};
   const idsOf = (envId: string, pick: (r: Resource) => boolean) =>
     [...new Set(resources.filter((r) => r.envId === envId && pick(r)).map((r) => r.id.toLowerCase()))];
@@ -254,7 +257,7 @@ export async function fetchAgentBillingSummary(
           .sort((a, b) => b[1].value - a[1].value)
           .forEach(([id, a]) => log(`      [${kind.get(id) ?? 'unmatched id ' + id}] ${a.name}: ${a.value.toFixed(2)} (${a.parts.join(', ')})`));
         out[env.id] = c;
-        writeJson(summaryCacheKey(env.id), c);
+        writeMonth(SUMMARY_CACHE, env.id, month, c);
       } catch (err) {
         log(`   ${env.name}: billing summary failed: ${err instanceof Error ? err.message : errorText(err)}`);
       }

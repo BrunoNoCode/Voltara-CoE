@@ -218,7 +218,7 @@ export function SidePanel({
   );
 }
 
-export function KpiCard({ icon, color, label, value, sub }: { icon: ReactNode; color: string; label: string; value: string; sub?: string }) {
+export function KpiCard({ icon, color, label, value, sub, extra }: { icon: ReactNode; color: string; label: string; value: string; sub?: string; extra?: ReactNode }) {
   return (
     <div className="card kpi">
       <div className="kpi-icon" style={{ background: `${color}1a`, color }}>
@@ -229,6 +229,7 @@ export function KpiCard({ icon, color, label, value, sub }: { icon: ReactNode; c
         <div className="kpi-value">{value}</div>
         {sub && <div className="kpi-sub">{sub}</div>}
       </div>
+      {extra && <div className="kpi-extra">{extra}</div>}
     </div>
   );
 }

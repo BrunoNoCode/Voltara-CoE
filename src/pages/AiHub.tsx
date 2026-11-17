@@ -1,9 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
-import { BadgeCheck, Bot, Coins, Download, Gauge, Info, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Workflow } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { BadgeCheck, Bot, ChevronLeft, ChevronRight, Coins, Download, ExternalLink, Gauge, Globe, Info, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Workflow } from 'lucide-react';
 import { useStore } from '../state/AppStore';
-import { DonutChart } from '../components/DonutChart';
-import { FilterSelect, KpiCard, Pagination, PoweredByPill, SidePanel, SortTh, Tabs, Toast } from '../components/ui';
+import { AiHeroArt } from '../components/AiHeroArt';
+import { FilterSelect, KpiCard, Pagination, PoweredByPill, RowMenu, SidePanel, SortTh, Tabs, Toast } from '../components/ui';
 import { useTable } from '../lib/useTable';
 import { downloadCsv, fmtAgo, fmtDateTime, fmtNumber, TYPE_COLOR } from '../lib/format';
 import { clickableRow } from '../lib/clickableRow';
@@ -23,12 +23,11 @@ import {
   useCostAssumptions,
   type CostAssumptions,
 } from '../lib/aiCosts';
-import { cachedAgentUsage, fetchAgentUsage, mockAgentUsage, type AgentUsage } from '../data/liveAiUsage';
+import { cachedAgentUsage, mockAgentUsage, type AgentUsage } from '../data/liveAiUsage';
 import { cachedCopilotCapacity, fetchCopilotCapacity, mockCopilotCapacity, type CopilotCapacity } from '../data/liveCopilotCapacity';
 import {
   cachedResourceConsumption,
   creditsOf,
-  fetchResourceThresholds,
   mockResourceConsumption,
   monthLabel,
   periodOf,
@@ -52,23 +51,31 @@ import {
   type FlowAiConsumption,
   type FlowAiEntry,
 } from '../data/liveFlowAiConsumption';
-import { cachedThresholds, isThresholdDefined, saveThresholdDefaults, thresholdOf, type ResourceThreshold, type ThresholdCache } from '../data/liveThresholds';
+import { cachedThresholds, isThresholdDefined, saveThresholdDefaults, thresholdOf, type ResourceThreshold } from '../data/liveThresholds';
 import { AgentDetailPanel, BulkThresholdPanel, ThresholdDefaultsPanel } from './AiThresholds';
 import { isAgent, thresholdText } from '../lib/aiThresholds';
 import { isActiveThresholdJob, latestThresholdJob, thresholdJobProgress, useThresholdJobs } from '../lib/thresholdJobs';
 import { isHosted } from '../data/api';
+import { currentMonthKey, isCurrentMonth, monthDate, monthElapsed, monthPeriod, selectableMonths } from '../data/aiMonths';
 import type { Environment, Resource } from '../data/types';
 
 /** Environments queried at the same time for agent sessions / licensing data. */
 const USAGE_CONCURRENCY = 3;
-const ENV_COLORS = ['#009999', '#6a3fd1', '#0f62a8', '#e05a9c', '#f2a900', '#3aa6a6', '#5f9fdf', '#d9363e', '#7d8e99', '#1aa260'];
-const OTHER_COLOR = '#c3ccd2';
-const PREPAID_COLOR = '#009999';
-const PAYGO_COLOR = '#f2a900';
+/** Environments shown in the Credit allocation vs consumption card. */
+const ALLOCATION_TOP = 10;
+/** Dot colour per rank in Top Consumers. */
+const TOP_PALETTE = ['#6a3fd1', '#0f62a8', '#009999', '#e05a9c', '#f2a900', '#3aa6a6', '#5f9fdf', '#d9363e', '#7d8e99', '#1aa260'];
 
-/** Environments shown in the Cost by Environment donut; the rest are grouped as "Others". */
-const TOP_ENVS = 5;
-const OTHERS = 'Others';
+/** Month-scoped state key: consumption is kept per month and environment. */
+const mk = (month: string, envId: string) => `${month}|${envId}`;
+/** The entries of one month, keyed by environment id. */
+function ofMonth<T>(rec: Record<string, T>, month: string): Record<string, T> {
+  const out: Record<string, T> = {};
+  const p = `${month}|`;
+  for (const [k, v] of Object.entries(rec)) if (k.startsWith(p)) out[k.slice(p.length)] = v;
+  return out;
+}
+const withMonth = <T,>(rec: Record<string, T>, month: string): Record<string, T> => Object.fromEntries(Object.entries(rec).map(([k, v]) => [mk(month, k), v]));
 
 interface AiRow {
   r: Resource;
@@ -110,7 +117,7 @@ const readTab = (): AiHubTab => {
   }
 };
 
-/** When the Agents tab data was last fetched: resources/limits/sessions ("Sync") and consumption ("Fetch consumption"). */
+/** When the Agents tab data was last fetched ("Refresh"): resources/limits/sessions and consumption. */
 interface AgentsRefreshed {
   synced?: string;
   consumption?: string;
@@ -129,19 +136,16 @@ const isCloudFlow = (r: Resource) => r.type === 'Cloud Flow' || r.type === 'Sche
 const typeLabel = (r: Resource) => (r.type === 'Copilot Studio' ? 'Agent' : r.type === 'Agent Flow' ? 'Agent flow' : isCloudFlow(r) ? 'Cloud flow' : 'Other');
 
 export function AiHub() {
-  const { environments, resources, resourceLoads, resourceSync, showCachedResources, syncMonitoredResources } = useStore();
+  const { environments, resources, resourceLoads, resourceSync, showCachedResources } = useStore();
   const [hideSystem] = useHideSystem();
   const [assumptions, saveAssumptions] = useCostAssumptions();
   const [hosted, setHosted] = useState<boolean | null>(null);
   const [usage, setUsage] = useState<Record<string, AgentUsage | null>>({});
-  const [usageBusy, setUsageBusy] = useState(0);
   const [capacity, setCapacity] = useState<Record<string, CopilotCapacity | null>>({});
   const [capacityBusy, setCapacityBusy] = useState(0);
   const [consumption, setConsumption] = useState<Record<string, ResourceConsumption | null>>({});
   const [billing, setBilling] = useState<Record<string, ResourceConsumption | null>>({});
   const [showAssumptions, setShowAssumptions] = useState(false);
-  const [creditsBusy, setCreditsBusy] = useState(false);
-  const [creditsLog, setCreditsLog] = useState<string[]>([]);
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingLog, setBillingLog] = useState<string[]>([]);
   const [summaryBusy, setSummaryBusy] = useState(false);
@@ -151,8 +155,15 @@ export function AiHub() {
   const [flowAiLog, setFlowAiLog] = useState<string[]>([]);
   const [toast, setToast] = useState('');
   const [q, setQ] = useState('');
-  const [envFilter, setEnvFilter] = useState('');
+  /** Selected month ("yyyy-mm": current or last month) and AI Hub environment ('' = all): they scope the whole page. */
+  const [month, setMonth] = useState(currentMonthKey);
+  const [hubEnv, setHubEnv] = useState('');
+  const [topType, setTopType] = useState('');
+  /** "Nov 2026" */
+  const monthText = monthLabel(monthDate(month));
   const [typeFilter, setTypeFilter] = useState('');
+  const navigate = useNavigate();
+  const envTableRef = useRef<HTMLDivElement>(null);
   const [thresholds, setThresholds] = useState(() => cachedThresholds());
   const [showDefaults, setShowDefaults] = useState(false);
   const [showBulk, setShowBulk] = useState(false);
@@ -208,26 +219,21 @@ export function AiHub() {
       for (const e of allMonitored) if (!(e.id in next)) next[e.id] = cachedAgentUsage(e.id);
       return next;
     });
-    setCapacity((prev) => {
+    // Month-scoped figures: the current month and last month (the months the user can pick).
+    const months = selectableMonths();
+    const seed = <T,>(prev: Record<string, T>, read: (envId: string, m: string) => T) => {
       const next = { ...prev };
-      for (const e of allMonitored) if (!(e.id in next)) next[e.id] = cachedCopilotCapacity(e.id);
+      for (const m of months) for (const e of allMonitored) if (!(mk(m, e.id) in next)) next[mk(m, e.id)] = read(e.id, m);
       return next;
-    });
+    };
+    setCapacity((prev) => seed(prev, (id, m) => cachedCopilotCapacity(id, m)));
     setConsumption((prev) => {
       const next = { ...prev };
       for (const e of allMonitored) if (!(e.id in next)) next[e.id] = cachedResourceConsumption(e.id);
       return next;
     });
-    setBilling((prev) => {
-      const next = { ...prev };
-      for (const e of allMonitored) if (!(e.id in next)) next[e.id] = cachedAgentBillingSummary(e.id);
-      return next;
-    });
-    setFlowAi((prev) => {
-      const next = { ...prev };
-      for (const e of allMonitored) if (!(e.id in next)) next[e.id] = cachedFlowAiConsumption(e.id);
-      return next;
-    });
+    setBilling((prev) => seed(prev, (id, m) => cachedAgentBillingSummary(id, m)));
+    setFlowAi((prev) => seed(prev, (id, m) => cachedFlowAiConsumption(id, m)));
   }
 
   useEffect(() => {
@@ -236,6 +242,11 @@ export function AiHub() {
 
   const resourcesLoading = allMonitored.some((e) => resourceLoads[e.id]?.state === 'loading' || resourceLoads[e.id]?.refreshing);
 
+  /** Consumption of the selected month, keyed by environment. */
+  const billingM = useMemo(() => ofMonth(billing, month), [billing, month]);
+  const flowAiM = useMemo(() => ofMonth(flowAi, month), [flowAi, month]);
+  const isCurMonth = isCurrentMonth(month);
+
   const aiResources = useMemo(() => {
     const ids = new Set(monitored.map((e) => e.id));
     const out = resources.filter((r) => ids.has(r.envId) && AI_TYPES.has(r.type) && !(hideSystem && isSystemOwned(r)));
@@ -243,7 +254,7 @@ export function AiHub() {
     const listed = new Set(out.map((r) => `${r.envId}:${r.id.toLowerCase()}`));
     const byKey = new Map(resources.map((r) => [`${r.envId}:${r.id.toLowerCase()}`, r]));
     for (const env of monitored)
-      for (const f of Object.values(flowAi[env.id]?.byFlow ?? {})) {
+      for (const f of Object.values(flowAiM[env.id]?.byFlow ?? {})) {
         const key = `${env.id}:${f.id}`;
         if (f.consumed <= 0 || listed.has(key)) continue;
         const r = byKey.get(key) ?? flowAiResource(env.id, f);
@@ -252,27 +263,19 @@ export function AiHub() {
         out.push(r);
       }
     return out;
-  }, [monitored, resources, hideSystem, flowAi]);
-
-  /** Monitored environments that contain at least one agent (the only ones worth a transcript query). */
-  const agentEnvs = useMemo(() => {
-    const withAgents = new Set(aiResources.filter((r) => r.type === 'Copilot Studio').map((r) => r.envId));
-    return monitored.filter((e) => withAgents.has(e.id));
-  }, [monitored, aiResources]);
-
-  // Latest lists, read by "Sync" after the resource sync re-rendered the page (its closure has the old ones).
-  const monitoredRef = useRef(monitored);
-  const agentEnvsRef = useRef(agentEnvs);
-  useLayoutEffect(() => {
-    monitoredRef.current = monitored;
-    agentEnvsRef.current = agentEnvs;
-  }, [monitored, agentEnvs]);
+  }, [monitored, resources, hideSystem, flowAiM]);
 
   /** Monitored environments with any agent or agent flow (licensing data is read for these). */
   const aiEnvs = useMemo(() => {
     const withAi = new Set(aiResources.map((r) => r.envId));
     return monitored.filter((e) => withAi.has(e.id));
   }, [monitored, aiResources]);
+
+  // The selected environment scopes the whole page (charts, tables and Refresh). A selection no longer in the AI Hub is ignored.
+  const scopeEnv = hubEnv && monitored.some((e) => e.id === hubEnv) ? hubEnv : '';
+  const scopedMonitored = useMemo(() => (scopeEnv ? monitored.filter((e) => e.id === scopeEnv) : monitored), [monitored, scopeEnv]);
+  const scopedAiEnvs = useMemo(() => (scopeEnv ? aiEnvs.filter((e) => e.id === scopeEnv) : aiEnvs), [aiEnvs, scopeEnv]);
+  const hubEnvOptions = useMemo(() => [...monitored].sort((a, b) => a.name.localeCompare(b.name)), [monitored]);
 
   /** Runs `load` for each environment, a few at a time, tracking how many are still pending. */
   const runQueue = async (targets: Environment[], load: (env: Environment) => Promise<void>, setBusy: (fn: (n: number) => number) => void) => {
@@ -288,22 +291,16 @@ export function AiHub() {
     await Promise.all(Array.from({ length: Math.min(USAGE_CONCURRENCY, targets.length) }, worker));
   };
 
-  const loadUsage = (targets: Environment[]) => {
-    return runQueue(targets, async (env) => {
-      const result = await fetchAgentUsage(env);
-      setUsage((prev) => ({ ...prev, [env.id]: result }));
-    }, setUsageBusy);
-  };
-
   const loadCapacity = (targets: Environment[]) => {
     return runQueue(targets, async (env) => {
+      // The licensing API only returns the current month (it is also saved as that month's snapshot).
       const result = await fetchCopilotCapacity(env);
-      setCapacity((prev) => ({ ...prev, [env.id]: result }));
+      setCapacity((prev) => ({ ...prev, [mk(currentMonthKey(), env.id)]: result }));
     }, setCapacityBusy);
   };
 
   /** Old billing endpoint (Copilot Studio billing API): kept for its fetch log only, the table is not changed. */
-  const loadAgentBilling = async () => {
+  const loadAgentBilling = async (targets: Environment[]) => {
     setBillingBusy(true);
     setBillingLog([]);
     const log = (line: string) => {
@@ -311,7 +308,7 @@ export function AiHub() {
       setBillingLog((prev) => [...prev, `${new Date().toLocaleTimeString()}  ${line}`]);
     };
     try {
-      const n = Object.keys(await fetchAgentBilling(monitored, resources, log)).length;
+      const n = Object.keys(await fetchAgentBilling(targets, resources, log)).length;
       log(`Done: ${n} environment${n === 1 ? '' : 's'} answered (log only, table not changed)`);
     } catch (e) {
       log(`Error: ${e instanceof Error ? e.message : String(e)}`);
@@ -320,8 +317,8 @@ export function AiHub() {
     }
   };
 
-  /** Credits consumed this month per Standard agent and agent flow (billing summary API): the consumption shown in the table. */
-  const loadBillingSummary = async () => {
+  /** Credits consumed in month `m` per Standard agent and agent flow (billing summary API): the consumption shown in the table. */
+  const loadBillingSummary = async (targets: Environment[], m: string) => {
     setSummaryBusy(true);
     setSummaryLog([]);
     const log = (line: string) => {
@@ -329,8 +326,8 @@ export function AiHub() {
       setSummaryLog((prev) => [...prev, `${new Date().toLocaleTimeString()}  ${line}`]);
     };
     try {
-      const b = await fetchAgentBillingSummary(monitored, resources, log);
-      setBilling((prev) => ({ ...prev, ...b }));
+      const b = await fetchAgentBillingSummary(targets, resources, log, m);
+      setBilling((prev) => ({ ...prev, ...withMonth(b, m) }));
       const n = Object.keys(b).length;
       log(`Done: consumption updated for ${n} environment${n === 1 ? '' : 's'}`);
       return n;
@@ -342,8 +339,8 @@ export function AiHub() {
     }
   };
 
-  /** AI Builder credits consumed this month per cloud flow (msdyn_aievents, PowerAutomate/AIBuilder): adds those cloud flows to the table. */
-  const loadFlowAi = async () => {
+  /** AI Builder credits consumed in month `m` per cloud flow (msdyn_aievents, PowerAutomate/AIBuilder): adds those cloud flows to the table. */
+  const loadFlowAi = async (targets: Environment[], m: string) => {
     setFlowAiBusy(true);
     setFlowAiLog([]);
     const log = (line: string) => {
@@ -351,8 +348,8 @@ export function AiHub() {
       setFlowAiLog((prev) => [...prev, `${new Date().toLocaleTimeString()}  ${line}`]);
     };
     try {
-      const f = await fetchFlowAiConsumption(monitored, log);
-      setFlowAi((prev) => ({ ...prev, ...f }));
+      const f = await fetchFlowAiConsumption(targets, log, m);
+      setFlowAi((prev) => ({ ...prev, ...withMonth(f, m) }));
       const flows = Object.values(f).reduce((n, c) => n + Object.values(c.byFlow).filter((x) => x.consumed > 0).length, 0);
       const n = Object.keys(f).length;
       log(`Done: ${flows} cloud flow${flows === 1 ? '' : 's'} with AI Builder consumption in ${n} environment${n === 1 ? '' : 's'}`);
@@ -365,88 +362,93 @@ export function AiHub() {
     }
   };
 
-  /** Limits per resource for all monitored environments (one tenant-wide resourceThresholds call). */
-  const loadResourceCredits = async (targets: Environment[]) => {
-    setCreditsBusy(true);
-    setCreditsLog([]);
-    const log = (line: string) => {
-      console.info('[resourceThresholds]', line);
-      setCreditsLog((prev) => [...prev, `${new Date().toLocaleTimeString()}  ${line}`]);
-    };
-    try {
-      log(`GET resourceThresholds (MCSMessages) for ${targets.length} monitored environment${targets.length === 1 ? '' : 's'}`);
-      const r = await fetchResourceThresholds(targets, log);
-      if (!r) {
-        log('No data returned: kept the cached limits');
-        return null;
-      }
-      setConsumption((prev) => ({ ...prev, ...r.byEnv }));
-      // The fetched rows are used directly (the browser cache may be full and keep older values).
-      if (r.thresholds) {
-        setThresholds(r.thresholds);
-        matchLog(r.thresholds).forEach(log);
-      } else reloadThresholds();
-      if (r.note) log(r.note);
-      const check = diagnose(r.byEnv);
-      check.forEach(log);
-      return [r.note ?? '', check[0] ?? ''].filter(Boolean).join(' · ');
-    } catch (e) {
-      log(`Error: ${e instanceof Error ? e.message : String(e)}`);
-      return null;
-    } finally {
-      setCreditsBusy(false);
-    }
-  };
-
   // Nothing is queried automatically: the last fetched data (browser cache) is shown until one of the buttons is clicked.
 
-  /** Overview › "Refresh": Copilot Credits per environment (licensing API) only. */
+  /** Scope of a refresh, for the toasts: "all environments" or the selected one, and the month. */
+  const scopeText = () => `${scopeEnv ? (envName.get(scopeEnv) ?? 'the environment') : 'all environments'} · ${monthText}`;
+
+  /**
+   * Overview › "Refresh", scoped to the selected environment (default: all) and month: Copilot Credits per environment
+   * (licensing API, current month only; its settings are also used to estimate a past month without a snapshot) and the
+   * consumption per agent, agent flow and cloud flow of the selected month.
+   */
   const refreshEnvironments = async () => {
     if (!hosted) {
       setToast('Local preview: environment credits are sample data');
       return;
     }
-    await loadCapacity(aiEnvs);
-    setToast(`Refreshed Copilot Credits for ${aiEnvs.length} environment${aiEnvs.length === 1 ? '' : 's'}`);
-  };
-
-  /** Agents › "Sync": all AI resources (agents, agent flows, cloud flows), their limits (resourceThresholds) and agent sessions. */
-  const syncResources = async (quiet = false) => {
-    if (!hosted) {
-      await syncMonitoredResources(true);
-      const msg = 'Local preview: limits and sessions are sample data';
-      if (!quiet) setToast(msg);
-      return msg;
-    }
-    await syncMonitoredResources(true);
-    // Environments with agents are known once the synced resources are rendered: wait for that commit.
-    await new Promise((r) => setTimeout(r, 0));
-    const [limits] = await Promise.all([loadResourceCredits(monitoredRef.current), loadUsage(agentEnvsRef.current)]);
-    stampAgentsRefreshed('synced');
-    const msg = [`Synced AI resources`, limits === null ? 'limits unavailable (kept the cached data)' : `limits fetched${limits ? ` (${limits})` : ''}`].join(' · ');
-    if (!quiet) setToast(`${msg} · see the Debug logs tab`);
-    return msg;
-  };
-
-  /** Agents › "Fetch consumption": agents and agent flows (billing summary API), cloud flows (AI Builder events); the old billing call logs only. */
-  const fetchConsumption = async (quiet = false) => {
-    if (!hosted) {
-      const msg = 'Local preview: the consumption APIs are only available in the hosted app';
-      if (!quiet) setToast(msg);
-      return msg;
-    }
-    const [billedEnvs, aiFlows] = await Promise.all([loadBillingSummary(), loadFlowAi(), loadAgentBilling()]);
+    const [, billedEnvs, aiFlows] = await Promise.all([loadCapacity(scopedAiEnvs), loadBillingSummary(scopedMonitored, month), loadFlowAi(scopedMonitored, month)]);
     stampAgentsRefreshed('consumption');
-    const msg = [`consumption of agents and agent flows: ${billedEnvs} environment${billedEnvs === 1 ? '' : 's'}`, `cloud flows with AI Builder consumption: ${aiFlows}`].join(' · ');
-    if (!quiet) setToast(`${msg} · see the Debug logs tab`);
-    return msg;
+    setToast(`Refreshed ${scopeText()}: credits of ${scopedAiEnvs.length} environment${scopedAiEnvs.length === 1 ? '' : 's'}, consumption of ${billedEnvs} environment${billedEnvs === 1 ? '' : 's'}, ${aiFlows} cloud flow${aiFlows === 1 ? '' : 's'} with AI`);
   };
 
-  /** Licensing data per environment: live/cached when hosted, sample data in local preview. */
-  const capacityFor = useMemo(() => {
-    if (hosted !== false) return capacity;
-    return Object.fromEntries(monitored.map((e) => [e.id, mockCopilotCapacity(e.id)]));
-  }, [hosted, capacity, monitored]);
+  /**
+   * Agents › "Refresh" (selected environment and month): only the consumption, the resources are not synced. Agents and agent
+   * flows (billing summary API), cloud flows (AI Builder events); the old billing call (current month only) logs only.
+   */
+  const fetchConsumption = async () => {
+    if (!hosted) {
+      setToast('Local preview: the consumption APIs are only available in the hosted app');
+      return;
+    }
+    const [billedEnvs, aiFlows] = await Promise.all([
+      loadBillingSummary(scopedMonitored, month),
+      loadFlowAi(scopedMonitored, month),
+      isCurMonth ? loadAgentBilling(scopedMonitored) : Promise.resolve(),
+    ]);
+    stampAgentsRefreshed('consumption');
+    const msg = [`${scopeText()}`, `consumption of agents and agent flows: ${billedEnvs} environment${billedEnvs === 1 ? '' : 's'}`, `cloud flows with AI Builder consumption: ${aiFlows}`].join(' · ');
+    setToast(`${msg} · see the Debug logs tab`);
+  };
+
+  /**
+   * Licensing data per environment for the selected month: live/cached when hosted, sample data in local preview.
+   * The licensing API only returns the current month: a past month uses the snapshot saved during that month, else it is
+   * estimated from the consumption summed per resource and the current allocation / pay-as-you-go settings.
+   */
+  const capacityFor = useMemo<Record<string, CopilotCapacity | null | undefined>>(() => {
+    if (hosted === false)
+      return Object.fromEntries(
+        monitored.map((e) => {
+          const c = mockCopilotCapacity(e.id);
+          return [e.id, isCurMonth ? c : { ...c, consumed: Math.round(c.consumed * 0.85), payGoConsumed: Math.round(c.payGoConsumed * 0.85) }];
+        }),
+      );
+    const cur = ofMonth(capacity, currentMonthKey());
+    if (isCurMonth) return cur;
+    const snaps = ofMonth(capacity, month);
+    const out: Record<string, CopilotCapacity | null> = {};
+    for (const e of monitored) {
+      const snap = snaps[e.id];
+      if (snap && !snap.error) {
+        out[e.id] = snap;
+        continue;
+      }
+      const b = billingM[e.id]?.error ? undefined : billingM[e.id];
+      const f = flowAiM[e.id];
+      const settings = cur[e.id] && !cur[e.id]!.error ? cur[e.id]! : null;
+      if (!b && !f) {
+        out[e.id] = null;
+        continue;
+      }
+      const total =
+        Object.values(b?.byResource ?? {}).reduce((s, x) => s + x.consumed, 0) + Object.values(f?.byFlow ?? {}).reduce((s, x) => s + x.consumed, 0);
+      const allocated = settings ? settings.allocated + settings.autoAllocated : 0;
+      const prepaid = settings?.payGo ? Math.min(total, allocated) : total;
+      const savedAt = [b?.savedAt, f?.savedAt].filter(Boolean).sort().pop() ?? new Date().toISOString();
+      out[e.id] = {
+        savedAt,
+        allocated: settings?.allocated ?? 0,
+        autoAllocated: settings?.autoAllocated ?? 0,
+        consumed: prepaid,
+        payGo: settings?.payGo ?? false,
+        payGoConsumed: total - prepaid,
+        tenantPool: settings?.tenantPool ?? false,
+        estimated: true,
+      };
+    }
+    return out;
+  }, [hosted, capacity, monitored, month, isCurMonth, billingM, flowAiM]);
 
   /** Agent sessions per environment: live/cached when hosted, sample data in local preview. */
   const usageFor = useMemo(() => {
@@ -478,6 +480,7 @@ export function AiHub() {
   const priceFor = useMemo(() => {
     const out: Record<string, number> = {};
     for (const [id, c] of Object.entries(capacityFor)) {
+      if (c === undefined) continue;
       const used = c && !c.error ? c.consumed + c.payGoConsumed : 0;
       out[id] = c && used > 0 ? (c.consumed * prepaidPrice + c.payGoConsumed * payGoPrice) / used : prepaidPrice;
     }
@@ -486,7 +489,7 @@ export function AiHub() {
 
   const rows = useMemo<AiRow[]>(
     () =>
-      aiResources.map((r) => {
+      aiResources.filter((r) => !scopeEnv || r.envId === scopeEnv).map((r) => {
         const u = usageFor[r.envId];
         const usage = !isAgent(r) ? r.runs30d : u && !u.error ? (u.sessions[r.id.toLowerCase()] ?? 0) : undefined;
         const c = consumptionFor[r.envId];
@@ -495,8 +498,8 @@ export function AiHub() {
         // Limits come from the resource threshold row. Consumption of agents and agent flows comes only from the billing summary
         // API, matched on cdsBotId (bot id / workflow id); other resources keep "resourceConsumption" of their threshold row.
         const threshold = thresholdOf(thresholds, r);
-        const b = isSummaryResource(r) ? billing[r.envId]?.byResource[r.id.toLowerCase()] : undefined;
-        const fa = isCloudFlow(r) ? flowAi[r.envId]?.byFlow[r.id.toLowerCase()] : undefined;
+        const b = isSummaryResource(r) ? billingM[r.envId]?.byResource[r.id.toLowerCase()] : undefined;
+        const fa = isCloudFlow(r) ? flowAiM[r.envId]?.byFlow[r.id.toLowerCase()] : undefined;
         const consumed = isAgent(r) || isAgentFlow(r)
           ? b?.consumed
           : fa
@@ -509,77 +512,25 @@ export function AiHub() {
         const cost = consumed === undefined ? undefined : consumed * (priceFor[r.envId] ?? prepaidPrice);
         return { r, envName: envName.get(r.envId) ?? '', usage, credits, consumed, billed: !!b, threshold, cost, flowAi: fa };
       }),
-    [aiResources, usageFor, consumptionFor, billing, flowAi, thresholds, priceFor, prepaidPrice, envName],
+    [aiResources, scopeEnv, usageFor, consumptionFor, billingM, flowAiM, thresholds, priceFor, prepaidPrice, envName],
   );
 
   /** Report lines whose resource is not among the listed agents / agent flows (deleted, renamed, MSFT-owned, other kinds). */
   const unmatched = useMemo(() => {
     const listed = new Set(aiResources.flatMap((r) => [`${r.envId}:${r.id.toLowerCase()}`, `${r.envId}:name:${r.name.trim().toLowerCase()}`]));
     const out: { envId: string; envName: string; id: string; credits: ResourceCredits }[] = [];
-    for (const env of monitored) {
+    for (const env of scopedMonitored) {
       const c = consumptionFor[env.id];
       if (!c || c.error) continue;
       for (const [id, credits] of Object.entries(c.byResource))
         if (!listed.has(`${env.id}:${id}`) && credits.consumed > 0) out.push({ envId: env.id, envName: env.name, id, credits });
     }
     return out.sort((a, b) => b.credits.consumed - a.credits.consumed);
-  }, [monitored, aiResources, consumptionFor]);
-
-  /** resourceId of each API row matched against the listed agents (botid) and agent flows (workflowid). */
-  const matchLog = (cache: ThresholdCache): string[] => {
-    const all = Object.values(cache.byKey);
-    const matched = aiResources.flatMap((r) => {
-      const t = thresholdOf(cache, r);
-      return t ? [{ r, t }] : [];
-    });
-    const used = matched.filter((m) => m.t.consumption > 0).sort((a, b) => b.t.consumption - a.t.consumption);
-    return [
-      `resourceId match: ${matched.length} of ${aiResources.length} listed agents / agent flows have an API row (${used.length} with resourceConsumption > 0; ${all.length} API rows in total).`,
-      ...used.slice(0, 5).map((m) => `   ${m.r.name} (${m.r.type}) ← ${m.t.resourceId}: ${fmtCredits(m.t.consumption)} credits`),
-    ];
-  };
-
-  /** How the fetched credits line up with the listed agents / agent flows (log lines, to diagnose ID mismatches). */
-  const diagnose = (byEnv: Record<string, ResourceConsumption>): string[] => {
-    const byId = new Map(resources.map((r) => [r.id.toLowerCase(), r]));
-    const listedIds = new Set(aiResources.map((r) => `${r.envId}:${r.id.toLowerCase()}`));
-    let entries = 0, withCredits = 0, matched = 0, matchedCredits = 0, otherEnv = 0, otherType = 0;
-    const otherTypes = new Map<string, number>();
-    const samples: string[] = [];
-    for (const [envId, c] of Object.entries(byEnv))
-      for (const [id, v] of Object.entries(c.byResource)) {
-        entries++;
-        if (v.consumed > 0) withCredits++;
-        if (listedIds.has(`${envId}:${id}`)) {
-          matched++;
-          if (v.consumed > 0) matchedCredits++;
-          continue;
-        }
-        const r = byId.get(id);
-        if (r && r.envId !== envId) otherEnv++;
-        else if (r) {
-          otherType++;
-          const k = AI_TYPES.has(r.type) ? `${r.type} (hidden: MSFT-owned)` : r.type;
-          otherTypes.set(k, (otherTypes.get(k) ?? 0) + 1);
-        } else if (v.consumed > 0 && samples.length < 5) samples.push(`${envName.get(envId) ?? envId}: ${id} (${fmtCredits(v.consumed)})`);
-      }
-    const agents = aiResources.filter((r) => r.type === 'Copilot Studio');
-    const flows = aiResources.filter((r) => r.type === 'Agent Flow');
-    const withData = (list: Resource[]) => list.filter((r) => byEnv[r.envId]).length;
-    return [
-      `Matching: ${matched} of ${entries} API resources are listed agents / agent flows (${matchedCredits} of ${withCredits} with credits > 0).`,
-      `   Listed: ${agents.length} agents, ${flows.length} agent flows (${withData(agents)} / ${withData(flows)} in environments with API data).`,
-      ...(otherEnv ? [`   ${otherEnv} API ids belong to a listed resource of another environment.`] : []),
-      ...(otherType ? [`   ${otherType} API ids are other inventory items: ${[...otherTypes].map(([k, n]) => `${k} ${n}`).join(', ')}.`] : []),
-      ...(samples.length ? ['   API ids with credits not found in the inventory:', ...samples.map((s) => `     ${s}`)] : []),
-      ...(agents.length ? ['   Sample agent ids (botid):', ...agents.slice(0, 3).map((r) => `     ${envName.get(r.envId) ?? r.envId}: ${r.id.toLowerCase()} ${r.name}`)] : []),
-      ...(flows.length ? ['   Sample agent flow ids (workflowid):', ...flows.slice(0, 3).map((r) => `     ${envName.get(r.envId) ?? r.envId}: ${r.id.toLowerCase()} ${r.name}`)] : []),
-    ];
-  };
+  }, [scopedMonitored, aiResources, consumptionFor]);
 
   const envRows = useMemo<EnvRow[]>(() => {
     const map = new Map<string, EnvRow>();
-    for (const env of monitored) map.set(env.id, { env, agents: 0, flows: 0, capacity: capacityFor[env.id] });
+    for (const env of scopedMonitored) map.set(env.id, { env, agents: 0, flows: 0, capacity: capacityFor[env.id] });
     const withRows = new Set<string>();
     for (const row of rows) {
       const e = map.get(row.r.envId)!;
@@ -588,7 +539,7 @@ export function AiHub() {
       else if (row.r.type === 'Agent Flow') e.flows++;
     }
     return [...map.values()].filter((e) => withRows.has(e.env.id));
-  }, [monitored, rows, capacityFor]);
+  }, [scopedMonitored, rows, capacityFor]);
 
   /** Cost this month: prepaid Consumption at the prepaid price + Pay-as-you-go consumed at the pay-as-you-go price. */
   const envCost = (e: EnvRow) => {
@@ -627,26 +578,32 @@ export function AiHub() {
     return { ...t, standard, msft, published, cost: t.prepaidCost + t.payGoCost };
   }, [envRows, rows, prepaidPrice, payGoPrice]);
 
-  // Cost by environment: the 5 most expensive, the rest grouped as "Others".
-  const envSlices = useMemo(() => {
-    const cost = (e: EnvRow) => envCost(e).total;
-    const sorted = [...envRows].filter((e) => cost(e) > 0).sort((a, b) => cost(b) - cost(a));
-    const top = sorted.slice(0, TOP_ENVS).map((e, i) => ({ id: e.env.id, label: e.env.name, value: Math.round(cost(e) * 100) / 100, color: ENV_COLORS[i % ENV_COLORS.length]! }));
-    const rest = sorted.slice(TOP_ENVS).reduce((s, e) => s + cost(e), 0);
-    if (rest > 0) top.push({ id: '', label: OTHERS, value: Math.round(rest * 100) / 100, color: OTHER_COLOR });
-    return top;
-    // envCost only depends on the prices
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [envRows, prepaidPrice, payGoPrice]);
+  /** Share of the month elapsed (1 for a past month): the expected consumption pace of an even spread. */
+  const pace = monthElapsed(month);
+  /** Period of the selected month shown in the footnote: 1st – today (current month) or the full month. */
+  const monthRange = `${monthPeriod(month).start.slice(0, 10)} – ${(isCurMonth ? new Date().toISOString() : monthPeriod(month).end).slice(0, 10)}`;
+
+  /**
+   * Credit allocation vs consumption: environments with prepaid credits allocated (no pay-as-you-go, none without
+   * credits), by % of the allocation consumed; projected = consumption at the current pace by the end of the month.
+   */
+  const allocation = useMemo(() => {
+    const list = envRows.flatMap((e) => {
+      const c = e.capacity;
+      const allocated = c && !c.error ? c.allocated + c.autoAllocated : 0;
+      if (!c || c.error || c.payGo || allocated <= 0) return [];
+      return [{ env: e.env, consumed: c.consumed, allocated, pct: c.consumed / allocated, projected: c.consumed / (pace || 1) }];
+    });
+    return list.sort((a, b) => b.pct - a.pct);
+  }, [envRows, pace]);
 
   const envTable = useTable<EnvRow>(
     envRows,
     {
       name: (e) => e.env.name,
-      agents: (e) => e.agents,
-      flows: (e) => e.flows,
-      allocated: (e) => capNum(e, (c) => c.allocated),
+      allocated: (e) => capNum(e, (c) => c.allocated + c.autoAllocated),
       consumed: (e) => capNum(e, (c) => c.consumed),
+      pct: (e) => capNum(e, (c) => (c.allocated + c.autoAllocated ? c.consumed / (c.allocated + c.autoAllocated) : 0)),
       payGo: (e) => capNum(e, (c) => (c.payGo ? 1 : 0)),
       payGoConsumed: (e) => capNum(e, (c) => c.payGoConsumed),
       tenantPool: (e) => capNum(e, (c) => (c.tenantPool ? 1 : 0)),
@@ -657,15 +614,16 @@ export function AiHub() {
     'desc',
   );
 
-  // Newest capacity fetch across environments = when "Refresh" last ran.
+  // Newest fetch of the selected month's data across the listed environments = when "Refresh" last ran.
   const lastRefreshed = useMemo(() => {
     let max = 0;
-    for (const e of envRows) {
-      const t = e.capacity?.savedAt ? Date.parse(e.capacity.savedAt) : 0;
-      if (t > max) max = t;
-    }
+    for (const e of envRows)
+      for (const at of [e.capacity?.savedAt, billingM[e.env.id]?.savedAt, flowAiM[e.env.id]?.savedAt]) {
+        const t = at ? Date.parse(at) : 0;
+        if (t > max) max = t;
+      }
     return max ? new Date(max).toISOString() : '';
-  }, [envRows]);
+  }, [envRows, billingM, flowAiM]);
   const agentsRefreshedNote: ReactNode = (() => {
     if (hosted === false) return 'Sample data';
     if (resourceSync) return 'Refreshing…';
@@ -680,10 +638,9 @@ export function AiHub() {
     return rows.filter(
       (row) =>
         (!needle || row.r.name.toLowerCase().includes(needle) || row.r.owner.toLowerCase().includes(needle)) &&
-        (!envFilter || row.r.envId === envFilter) &&
         (!typeFilter || typeLabel(row.r) === typeFilter),
     );
-  }, [rows, q, envFilter, typeFilter]);
+  }, [rows, q, typeFilter]);
   const filteredAgents = useMemo(() => filtered.filter((x) => isAgent(x.r)).length, [filtered]);
 
   /** A limit is defined for the row (agents only: agent flows have no limit). */
@@ -702,9 +659,9 @@ export function AiHub() {
     const usedTitle =
       x.consumed !== undefined
         ? x.billed
-          ? `${SUMMARY_SOURCE}, ${month}`
+          ? `${SUMMARY_SOURCE}, ${monthText}`
           : fa
-            ? `${FLOW_AI_SOURCE}, ${month}: ${fmtNumber(fa.events)} event${fa.events === 1 ? '' : 's'} · ` +
+            ? `${FLOW_AI_SOURCE}, ${monthText}:${fmtNumber(fa.events)} event${fa.events === 1 ? '' : 's'} · ` +
               Object.entries(fa.models)
                 .sort((a, b) => b[1].credits - a[1].credits)
                 .map(([k, m]) => `${k} ${fmtCredits(m.credits)}`)
@@ -712,7 +669,7 @@ export function AiHub() {
               (fa.llms.length ? ` · LLM ${fa.llms.join(', ')}` : '')
             : undefined
         : isSummaryResource(x.r)
-          ? `Nothing reported by the ${SUMMARY_SOURCE} yet (Fetch consumption)`
+          ? `Nothing reported by the ${SUMMARY_SOURCE} yet (Refresh)`
           : 'No consumption returned by the licensing API for this resource';
     const second = t
       ? `Limit ${fmtNumber(t.limit)}${t.limit > 0 ? ` (${pct}%)` : ''}${t.stopResource ? ' · Stopped' : ''}`
@@ -750,30 +707,38 @@ export function AiHub() {
     'desc',
   );
 
-  const envOptions = useMemo(() => envRows.map((e) => ({ value: e.env.id, label: e.env.name })).sort((a, b) => a.label.localeCompare(b.label)), [envRows]);
   const money = (n: number) => fmtMoney(n, assumptions.currency);
-  const month = monthLabel();
   /** Table row of the resource open in the detail panel: the panel shows the same consumption as the table. */
   const selectedRow = selected ? rows.find((x) => x.r.envId === selected.envId && x.r.id === selected.id) : undefined;
-  /** Agents (not agent flows) consuming the most Copilot Credits. */
-  const topAgents = useMemo(
-    () =>
-      rows
-        .filter((x) => isAgent(x.r) && (x.consumed ?? 0) > 0)
-        .sort((a, b) => (b.consumed ?? 0) - (a.consumed ?? 0))
-        .slice(0, 10)
-        .map((x) => ({ label: x.r.name, env: x.envName, value: x.consumed ?? 0 })),
-    [rows],
-  );
-  /** Agents and agent flows together, by Copilot Credits consumed. */
+  /** Agents, agent flows and cloud flows with AI (or one type, Top Consumers dropdown), by Copilot Credits consumed. */
   const topConsumers = useMemo(
     () =>
       rows
-        .filter((x) => (x.consumed ?? 0) > 0)
+        .filter((x) => (x.consumed ?? 0) > 0 && (!topType || typeLabel(x.r) === topType))
         .sort((a, b) => (b.consumed ?? 0) - (a.consumed ?? 0))
         .slice(0, 10),
-    [rows],
+    [rows, topType],
   );
+
+  const exportEnvCsv = () =>
+    downloadCsv(`ai-hub-environments-${month}.csv`, [
+      ['Environment', 'Credits allocated', 'Credits consumption', 'Consumption %', 'PayGo', 'PayGo consumption', 'Draw from tenant', `Cost (${assumptions.currency})`, 'Estimated'],
+      ...envTable.sorted.map((e) => {
+        const c = e.capacity && !e.capacity.error ? e.capacity : null;
+        const allocated = c ? c.allocated + c.autoAllocated : 0;
+        return [
+          e.env.name,
+          c ? allocated : '',
+          c ? Math.round(c.consumed * 100) / 100 : '',
+          c && allocated ? Math.round((c.consumed / allocated) * 1000) / 10 : '',
+          c ? (c.payGo ? 'Yes' : 'No') : '',
+          c ? Math.round(c.payGoConsumed * 100) / 100 : '',
+          c ? (c.tenantPool ? 'Yes' : 'No') : '',
+          c ? Math.round(envCost(e).total * 100) / 100 : '',
+          c?.estimated ? 'Yes' : '',
+        ];
+      }),
+    ]);
 
   const exportCsv = () =>
     downloadCsv('ai-hub-resources.csv', [
@@ -796,7 +761,7 @@ export function AiHub() {
   const capCell = (e: EnvRow, render: (c: CopilotCapacity) => ReactNode) => {
     const c = e.capacity;
     if (c === undefined || (c === null && capacityBusy > 0)) return <span className="muted">Loading…</span>;
-    if (c === null) return <span className="muted">Not loaded</span>;
+    if (c === null) return <span className="muted">{isCurMonth ? 'Not loaded' : 'No data'}</span>;
     if (c.error)
       return (
         <span className="ai-err" title={c.error}>
@@ -806,20 +771,17 @@ export function AiHub() {
     return render(c);
   };
   const yesNo = (v: boolean) => <span className={`ai-flag${v ? ' on' : ''}`}>{v ? 'Yes' : 'No'}</span>;
+  const estimatedTip = 'Estimated: no snapshot saved during this month. Consumption is summed per resource; allocation and pay-as-you-go settings are the current ones.';
 
-  const envBusy = capacityBusy > 0;
-  const syncBusy = !!resourceSync || creditsBusy || usageBusy > 0;
+  const envBusy = capacityBusy > 0 || summaryBusy || flowAiBusy;
+  const [lastMonth, curMonth] = [selectableMonths()[1], selectableMonths()[0]];
+  const pctOf = (c: CopilotCapacity) => {
+    const allocated = c.allocated + c.autoAllocated;
+    return allocated ? c.consumed / allocated : 0;
+  };
+  const publishedPct = totals.standard + totals.msft ? totals.published / (totals.standard + totals.msft) : 0;
   const fetching = summaryBusy || flowAiBusy || billingBusy;
-  const resourcesLeft = resourceSync ? resourceSync.total - resourceSync.done : 0;
-  const syncLabel = [
-    resourcesLeft ? `resources (${resourcesLeft} left)` : resourceSync ? 'resources' : '',
-    creditsBusy ? 'limits' : '',
-    usageBusy ? `sessions (${usageBusy} left)` : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
   const logs = [
-    { title: 'Limits fetch log (resourceThresholds)', lines: creditsLog, running: creditsBusy, clear: () => setCreditsLog([]) },
     { title: `Consumption fetch log (agents & agent flows · ${SUMMARY_SOURCE})`, lines: summaryLog, running: summaryBusy, clear: () => setSummaryLog([]) },
     { title: `Consumption fetch log (cloud flows · ${FLOW_AI_SOURCE})`, lines: flowAiLog, running: flowAiBusy, clear: () => setFlowAiLog([]) },
     { title: `Consumption fetch log (old · ${BILLING_SOURCE}, log only)`, lines: billingLog, running: billingBusy, clear: () => setBillingLog([]) },
@@ -848,20 +810,25 @@ export function AiHub() {
 
   return (
     <>
-      <div className="page-head row">
-        <div>
+      <div className="ai-hero">
+        <AiHeroArt />
+        <div className="ai-hero-text">
           <h1>AI Hub</h1>
-          <p>Copilot Credit consumption and cost per environment ({month}), and the agents, agent flows and cloud flows using AI Builder in each.</p>
-        </div>
-        <div className="spacer" />
+          <p>Copilot Credit consumption and cost per environment ({monthText}), and the agents, agent flows and cloud flows using AI Builder in each.</p>
+          <div className="ai-hero-actions">
         {tab === 'overview' && (
           <>
             <button className="btn" onClick={() => setShowAssumptions(true)}>
               <SlidersHorizontal size={16} /> Cost assumptions
             </button>
-            <button className="btn btn-primary" onClick={refreshEnvironments} disabled={envBusy} title="Refresh the Copilot Credits of each environment (licensing API)">
+            <button
+              className="btn btn-primary"
+              onClick={refreshEnvironments}
+              disabled={envBusy}
+              title={`Refresh the Copilot Credits of ${scopeText()} (${isCurMonth ? 'licensing API and consumption per resource' : 'consumption per resource of the month'})`}
+            >
               <RefreshCw size={16} className={envBusy ? 'spin' : undefined} />
-              {envBusy ? `Refreshing environments (${capacityBusy} left)…` : 'Refresh'}
+              {envBusy ? (capacityBusy > 0 ? `Refreshing environments (${capacityBusy} left)…` : 'Refreshing…') : 'Refresh'}
             </button>
           </>
         )}
@@ -871,35 +838,63 @@ export function AiHub() {
               <ShieldCheck size={16} /> Default limits
             </button>
             <button
-              className="btn"
+              className="btn btn-primary"
               onClick={() => void fetchConsumption()}
               disabled={fetching}
-              title={`Consumption per agent and agent flow from the ${SUMMARY_SOURCE}, AI Builder consumption of cloud flows from the ${FLOW_AI_SOURCE}`}
+              title={`Fetch the consumption of ${scopeText()}: per agent and agent flow from the ${SUMMARY_SOURCE} and AI Builder consumption of cloud flows from the ${FLOW_AI_SOURCE}. The resources are not synced (use Sync on Home).`}
             >
-              <Gauge size={16} className={fetching ? 'spin' : undefined} /> {fetching ? 'Fetching consumption…' : 'Fetch consumption'}
-            </button>
-            <button
-              className="btn btn-primary"
-              onClick={() => void syncResources()}
-              disabled={syncBusy}
-              title="Refresh all agents, agent flows and cloud flows, their Copilot Credit limits (resourceThresholds) and agent sessions"
-            >
-              <RefreshCw size={16} className={syncBusy ? 'spin' : undefined} />
-              {syncBusy ? `Refreshing ${syncLabel}…` : 'Refresh'}
+              <Gauge size={16} className={fetching ? 'spin' : undefined} />
+              {fetching ? 'Fetching consumption…' : 'Refresh'}
             </button>
           </>
         )}
+          </div>
+        </div>
+        <div className="ai-hero-tag">
+          <strong>People + AI</strong>
+          <span>Greater together</span>
+        </div>
       </div>
 
-      <Tabs<AiHubTab>
-        tabs={[
-          { key: 'overview', label: 'Overview' },
-          { key: 'agents', label: 'Agents', count: rows.length },
-          { key: 'logs', label: 'Debug logs', count: activeLogs },
-        ]}
-        value={tab}
-        onChange={setTab}
-      />
+      <div className="ai-tabs-row">
+        <Tabs<AiHubTab>
+          tabs={[
+            { key: 'overview', label: 'Overview' },
+            { key: 'agents', label: 'AI Consumption', count: rows.length },
+            { key: 'logs', label: 'Debug logs', count: activeLogs },
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
+        {tab !== 'logs' && (
+          <div className="ai-filters">
+            <label className="ai-env-select" title="Filters the whole AI Hub">
+              <Globe size={16} />
+              <select value={scopeEnv} onChange={(e) => setHubEnv(e.target.value)} aria-label="Environment">
+                <option value="">All environments</option>
+                {hubEnvOptions.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="ai-month-switch" role="group" aria-label="Month">
+              <button className="icon-btn" onClick={() => setMonth(lastMonth)} disabled={month === lastMonth} aria-label="Previous month">
+                <ChevronLeft size={16} />
+              </button>
+              {[lastMonth, curMonth].map((m) => (
+                <button key={m} className={`ai-month${month === m ? ' active' : ''}`} onClick={() => setMonth(m)} aria-pressed={month === m}>
+                  {monthLabel(monthDate(m))}
+                </button>
+              ))}
+              <button className="icon-btn" onClick={() => setMonth(curMonth)} disabled={month === curMonth} aria-label="Next month">
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {tab === 'overview' && (
       <>
@@ -914,7 +909,7 @@ export function AiHub() {
         <KpiCard
           icon={<Coins size={22} />}
           color="#009999"
-          label={`Cost (${month})`}
+          label={`Cost (${monthText})`}
           value={money(totals.cost)}
           sub={`${money(totals.prepaidCost)} prepaid · ${money(totals.payGoCost)} pay-as-you-go`}
         />
@@ -925,89 +920,111 @@ export function AiHub() {
           value={fmtNumber(totals.agents)}
           sub={`${fmtNumber(totals.standard)} Standard · ${fmtNumber(totals.msft)} MSFT Copilot`}
         />
+        <KpiCard icon={<Workflow size={22} />} color={TYPE_COLOR['Agent Flow']} label="Agent flows" value={fmtNumber(totals.flows)} sub={`${fmtNumber(totals.runs)} runs (30 days)`} />
         <KpiCard
           icon={<BadgeCheck size={22} />}
           color="#00a35a"
-          label="Agents Published"
+          label="Agents published"
           value={fmtNumber(totals.published)}
-          sub={
-            totals.standard + totals.msft
-              ? `${Math.round((totals.published / (totals.standard + totals.msft)) * 100)}% of agents · ${fmtNumber(totals.standard + totals.msft - totals.published)} not published`
-              : 'No agents'
+          sub={totals.standard + totals.msft ? `${fmtNumber(totals.standard + totals.msft - totals.published)} not published` : 'No agents'}
+          extra={
+            <svg className="ai-ring" viewBox="0 0 36 36" role="img" aria-label={`${Math.round(publishedPct * 100)}% published`}>
+              <circle cx="18" cy="18" r="15.5" className="ai-ring-bg" />
+              <circle cx="18" cy="18" r="15.5" className="ai-ring-fg" strokeDasharray={`${publishedPct * 97.4} 97.4`} />
+              <text x="18" y="21" textAnchor="middle">
+                {Math.round(publishedPct * 100)}%
+              </text>
+            </svg>
           }
         />
-        <KpiCard icon={<Workflow size={22} />} color={TYPE_COLOR['Agent Flow']} label="Agent flows" value={fmtNumber(totals.flows)} sub={`${fmtNumber(totals.runs)} runs (30 days)`} />
       </div>
 
-      <div className="home-row">
+      <div className="env-charts">
+        <div className="card card-pad home-chart">
+          <div className="card-title">Credit allocation vs consumption</div>
+          <div className="small muted">Top {ALLOCATION_TOP} environments · {monthText}</div>
+          <div className="ai-legend small">
+            <span>
+              <i className="sw consumed" /> Consumed
+            </span>
+            <span>
+              <i className="sw allocated" /> Allocated
+            </span>
+            {isCurMonth && (
+              <span title="Projected consumption by the end of the month at the current pace (capped at the end of the bar when it exceeds the allocation).">
+                <i className="sw pace" /> Expected pace ({Math.round(pace * 100)} % of month)
+              </span>
+            )}
+          </div>
+          {allocation.length ? (
+            <ul className="ai-alloc">
+              {allocation.slice(0, ALLOCATION_TOP).map((a) => (
+                <li
+                  key={a.env.id}
+                  className={`clickable${scopeEnv === a.env.id ? ' selected' : ''}`}
+                  {...clickableRow(() => setHubEnv(scopeEnv === a.env.id ? '' : a.env.id))}
+                  title={`${a.env.name}: ${fmtCredits(a.consumed)} of ${fmtCredits(a.allocated)} consumed${
+                    isCurMonth && a.pct < 1 ? ` · at this pace ~${fmtCredits(a.projected)} by the end of the month` : ''
+                  }`}
+                >
+                  <span className="lbl">{a.env.name}</span>
+                  <span className="track">
+                    <span className={`bar${a.pct >= 1 ? ' over' : isCurMonth && a.projected > a.allocated ? ' warn' : ''}`} style={{ width: `${Math.min(a.pct, 1) * 100}%` }} />
+                    {isCurMonth && <span className="ai-pace" style={{ left: `${Math.min(a.allocated > 0 ? a.projected / a.allocated : 1, 1) * 100}%` }} />}
+                  </span>
+                  <span className="num">
+                    <strong>{Math.round(a.pct * 100)} %</strong>
+                    <span className="small muted">
+                      {fmtCredits(a.consumed)} / {fmtCredits(a.allocated)}
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">{envBusy ? 'Loading credits…' : 'No environment with prepaid credits allocated (pay-as-you-go environments are not shown).'}</p>
+          )}
+          {allocation.length > 0 && (
+            <button className="link-btn ai-card-foot" onClick={() => envTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+              View all {fmtNumber(envRows.length)} →
+            </button>
+          )}
+        </div>
         <div className="card card-pad home-chart">
           <div className="card-title">
-            Cost by Environment
-            {envFilter && (
-              <button className="link-btn" onClick={() => setEnvFilter('')}>
-                Clear filter
-              </button>
-            )}
+            Top Consumers
+            <select className="select ai-top-select" value={topType} onChange={(e) => setTopType(e.target.value)} aria-label="Top consumers type">
+              <option value="">All</option>
+              <option value="Agent">Agents</option>
+              <option value="Agent flow">Agent flows</option>
+              <option value="Cloud flow">Cloud flows with AI</option>
+            </select>
           </div>
-          <div className="home-chart-body">
-            {envSlices.length ? (
-              <DonutChart
-                size={150}
-                centerLabel={assumptions.currency}
-                data={envSlices}
-                active={envSlices.find((s) => s.id && s.id === envFilter)?.label}
-                onSelect={(l) => {
-                  const id = envSlices.find((s) => s.label === l)?.id;
-                  if (id) setEnvFilter(envFilter === id ? '' : id);
-                }}
-              />
-            ) : (
-              <p className="muted small">{capacityBusy > 0 ? 'Loading credits…' : 'No credits consumed this month.'}</p>
-            )}
-          </div>
-        </div>
-        <div className="card card-pad home-chart">
-          <div className="card-title">Prepaid vs Pay-as-you-go</div>
-          <div className="home-chart-body">
-            {totals.cost > 0 ? (
-              <DonutChart
-                size={150}
-                centerLabel={assumptions.currency}
-                data={[
-                  { label: 'Prepaid', value: Math.round(totals.prepaidCost * 100) / 100, color: PREPAID_COLOR },
-                  { label: 'Pay-as-you-go', value: Math.round(totals.payGoCost * 100) / 100, color: PAYGO_COLOR },
-                ]}
-              />
-            ) : (
-              <p className="muted small">{capacityBusy > 0 ? 'Loading credits…' : 'No credits consumed this month.'}</p>
-            )}
-          </div>
-        </div>
-        <div className="card card-pad home-chart">
-          <div className="card-title">Top consumers (agents, agent flows &amp; cloud flows)</div>
-          <div className="home-chart-body" style={{ display: 'block' }}>
-            {topConsumers.length ? (
-              <ul className="hbars hbars-tall">
-                {topConsumers.map((x, i) => (
-                  <li key={i} title={`${x.r.name} · ${x.envName} · ${typeLabel(x.r)}`}>
-                    <span className="lbl">{x.r.name}</span>
-                    <span className="track">
-                      <span className="bar" style={{ width: `${Math.max(2, ((x.consumed ?? 0) / (topConsumers[0].consumed || 1)) * 100)}%`, background: TYPE_COLOR[x.r.type] }} />
-                    </span>
-                    <span className="num">{fmtCredits(x.consumed ?? 0)}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="muted small">{fetching ? 'Fetching consumption…' : 'No consumption loaded yet (Agents tab › Fetch consumption).'}</p>
-            )}
-          </div>
+          <div className="small muted">Copilot Credits · {monthText}</div>
+          {topConsumers.length ? (
+            <ul className="ai-top">
+              {topConsumers.map((x, i) => (
+                <li key={`${x.r.envId}:${x.r.id}`} className="clickable" {...clickableRow(() => setSelected(x.r))} title={`${x.r.name} · ${x.envName} · ${typeLabel(x.r)}`}>
+                  <span className="dot" style={{ background: TOP_PALETTE[i % TOP_PALETTE.length] }} />
+                  <span className="lbl">
+                    {x.r.name} <span className="muted">· {x.r.poweredBy ?? typeLabel(x.r)}</span>
+                  </span>
+                  <span className="track">
+                    <span className="bar" style={{ width: `${Math.max(2, ((x.consumed ?? 0) / (topConsumers[0].consumed || 1)) * 100)}%` }} />
+                  </span>
+                  <span className="num">{fmtCredits(x.consumed ?? 0)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">{fetching || envBusy ? 'Fetching consumption…' : `No consumption loaded for ${monthText} yet (Refresh).`}</p>
+          )}
         </div>
       </div>
 
-      <div className="card" style={{ marginBottom: 16 }}>
+      <div className="card" style={{ marginBottom: 16 }} ref={envTableRef}>
         <div className="card-pad" style={{ paddingBottom: 0 }}>
-          <div className="card-title" style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             Copilot Credits per Environment
             <span className="small muted" style={{ marginLeft: 'auto', fontWeight: 400 }}>
               {hosted === false ? (
@@ -1020,6 +1037,9 @@ export function AiHub() {
                 'Not refreshed yet'
               )}
             </span>
+            <button className="btn btn-sm" onClick={exportEnvCsv} disabled={!envTable.total}>
+              <Download size={14} /> Export
+            </button>
           </div>
         </div>
         <div className="table-wrap">
@@ -1027,27 +1047,38 @@ export function AiHub() {
             <thead>
               <tr>
                 <SortTh k="name" label="Environment" sortKey={envTable.sortKey} sortDir={envTable.sortDir} onSort={envTable.toggleSort} />
-                <SortTh k="agents" label="Agents" sortKey={envTable.sortKey} sortDir={envTable.sortDir} onSort={envTable.toggleSort} />
-                <SortTh k="flows" label="Agent flows" sortKey={envTable.sortKey} sortDir={envTable.sortDir} onSort={envTable.toggleSort} />
                 <SortTh k="allocated" label="Credits allocated" sortKey={envTable.sortKey} sortDir={envTable.sortDir} onSort={envTable.toggleSort} />
-                <SortTh k="consumed" label="Credits Consumption" sortKey={envTable.sortKey} sortDir={envTable.sortDir} onSort={envTable.toggleSort} />
+                <SortTh k="consumed" label="Credits consumption" sortKey={envTable.sortKey} sortDir={envTable.sortDir} onSort={envTable.toggleSort} />
+                <SortTh k="pct" label="Consumption %" sortKey={envTable.sortKey} sortDir={envTable.sortDir} onSort={envTable.toggleSort} />
                 <SortTh k="payGo" label="PayGo" sortKey={envTable.sortKey} sortDir={envTable.sortDir} onSort={envTable.toggleSort} />
                 <SortTh k="payGoConsumed" label="PayGo Consumption" sortKey={envTable.sortKey} sortDir={envTable.sortDir} onSort={envTable.toggleSort} />
                 <SortTh k="tenantPool" label="Draw from tenant" sortKey={envTable.sortKey} sortDir={envTable.sortDir} onSort={envTable.toggleSort} />
                 <SortTh k="cost" label="Cost" sortKey={envTable.sortKey} sortDir={envTable.sortDir} onSort={envTable.toggleSort} />
+                <th aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
               {envTable.pageRows.map((e) => (
-                <tr key={e.env.id} className={`clickable${envFilter === e.env.id ? ' selected' : ''}`} {...clickableRow(() => setEnvFilter(envFilter === e.env.id ? '' : e.env.id))}>
+                <tr
+                  key={e.env.id}
+                  className={`clickable${scopeEnv === e.env.id ? ' selected' : ''}`}
+                  {...clickableRow(() => setHubEnv(scopeEnv === e.env.id ? '' : e.env.id))}
+                  title={scopeEnv === e.env.id ? 'Show all environments' : 'Filter the AI Hub to this environment'}
+                >
                   <td>
                     <Link to={`/environments/${e.env.id}`} onClick={(ev) => ev.stopPropagation()}>
                       {e.env.name}
                     </Link>
-                    <div className="small muted">{e.env.type}</div>
+                    <div className="small muted">
+                      {e.env.type}
+                      {e.capacity?.estimated && (
+                        <span className="ai-est" title={estimatedTip}>
+                          {' '}
+                          · Estimated
+                        </span>
+                      )}
+                    </div>
                   </td>
-                  <td className="num-cell">{fmtNumber(e.agents)}</td>
-                  <td className="num-cell">{fmtNumber(e.flows)}</td>
                   <td className="num-cell">
                     {capCell(e, (c) => (
                       <span title={c.autoAllocated ? `Includes ${fmtCredits(c.autoAllocated)} auto-allocated` : undefined}>{fmtCredits(c.allocated + c.autoAllocated)}</span>
@@ -1061,6 +1092,21 @@ export function AiHub() {
                       </>
                     ))}
                   </td>
+                  <td>
+                    {capCell(e, (c) => {
+                      const p = pctOf(c);
+                      return c.allocated + c.autoAllocated > 0 ? (
+                        <span className="ai-pct">
+                          <span className="track">
+                            <span className={`bar${p >= 1 ? ' over' : p >= 0.8 ? ' warn' : ''}`} style={{ width: `${Math.min(p, 1) * 100}%` }} />
+                          </span>
+                          {Math.round(p * 100)} %
+                        </span>
+                      ) : (
+                        <span className="muted">—</span>
+                      );
+                    })}
+                  </td>
                   <td>{capCell(e, (c) => yesNo(c.payGo))}</td>
                   <td className="num-cell">{capCell(e, (c) => (c.payGo || c.payGoConsumed ? fmtCredits(c.payGoConsumed) : <span className="muted">—</span>))}</td>
                   <td>{capCell(e, (c) => yesNo(c.tenantPool))}</td>
@@ -1073,6 +1119,21 @@ export function AiHub() {
                         </strong>
                       );
                     })}
+                  </td>
+                  <td>
+                    <RowMenu
+                      items={[
+                        { label: 'Open environment', icon: <ExternalLink size={14} />, onClick: () => navigate(`/environments/${e.env.id}`) },
+                        {
+                          label: 'View agents',
+                          icon: <Bot size={14} />,
+                          onClick: () => {
+                            setHubEnv(e.env.id);
+                            setTab('agents');
+                          },
+                        },
+                      ]}
+                    />
                   </td>
                 </tr>
               ))}
@@ -1099,7 +1160,6 @@ export function AiHub() {
               <Search size={16} />
               <input placeholder="Search agents and flows by name or owner..." value={q} onChange={(e) => setQ(e.target.value)} />
             </div>
-            <FilterSelect label="Environment" value={envFilter} onChange={setEnvFilter} options={envOptions} />
             <FilterSelect label="Type" value={typeFilter} onChange={setTypeFilter} options={['Agent', 'Agent flow', 'Cloud flow']} />
             <span className="spacer" />
             <span className="small muted">{agentsRefreshedNote}</span>
@@ -1119,7 +1179,7 @@ export function AiHub() {
         </div>
         {reportPeriod !== undefined && (
           <div className="card-pad small muted ai-report-note">
-            <Info size={14} /> <strong>Consumption</strong> and <strong>Cost</strong> come from the licensing API (resource thresholds: current consumption per resource) and cover <strong>{reportPeriod.startsWith('last') ? `the ${reportPeriod}` : reportPeriod || 'the period of the data'}</strong>.
+            <Info size={14} /> <strong>Consumption</strong> and <strong>Cost</strong> come from the licensing API (resource thresholds: current consumption per resource) and cover <strong>{monthRange}</strong>.
           </div>
         )}
         <div className="table-wrap tall">
@@ -1228,7 +1288,7 @@ export function AiHub() {
           logs.map((l) => fetchLog(l.title, l.lines, l.running, l.clear))
         ) : (
           <div className="card card-pad muted small" style={{ marginBottom: 16 }}>
-            No fetch logs yet. Logs appear here when you run Sync or Fetch consumption on the Agents tab.
+            No fetch logs yet. Logs appear here when you run Refresh on the Agents tab.
           </div>
         ))}
 
@@ -1236,18 +1296,16 @@ export function AiHub() {
         <p className="small muted ai-disclaimer">
           <Info size={13} /> Copilot Credits per environment (allocated, month-to-date consumption, pay-as-you-go and overage settings) come from the Power Platform
           licensing API, the same data as the admin center (Licensing › Copilot Studio › Environments), on Refresh (Overview tab); reading it needs Power Platform
-          admin rights. On the Agents tab, Sync loads all agents, agent flows and cloud flows, their Copilot Credit limits (licensing API, resource thresholds) and
-          agent sessions of the last 30 days (conversation transcripts, read-only FetchXML); agent flow runs come from the resource sync. Fetch consumption loads the
-          credits consumed per agent and agent flow, and the AI Builder credits of cloud flows this month (AI Builder events, read-only FetchXML, prompt content is
-          not read). Everything is saved in this browser only, and each tab shows the last data fetched.
+          admin rights. Agents, agent flows and cloud flows, their Copilot Credit limits (licensing API, resource thresholds), agent sessions of the last 30 days
+          (conversation transcripts, read-only FetchXML) and agent flow runs come from Sync on Home. On the Agents tab, Refresh only loads the consumption: the
+          credits consumed per agent and agent flow, and the AI Builder credits of cloud flows (AI Builder events, read-only FetchXML, prompt content is not read). Everything is saved in this browser only, and each tab shows the last data fetched.
         </p>
       )}
 
       {showAssumptions && (
         <AssumptionsPanel
           value={assumptions}
-          month={month}
-          topAgents={topAgents}
+          month={monthText}
           onClose={() => setShowAssumptions(false)}
           onSave={(a) => {
             saveAssumptions(a);
@@ -1285,7 +1343,7 @@ export function AiHub() {
           threshold={thresholdOf(thresholds, selected)}
           consumed={selectedRow?.consumed}
           consumedSource={
-            selectedRow?.billed ? `${SUMMARY_SOURCE}, ${month}` : selectedRow?.flowAi ? `${FLOW_AI_SOURCE}, ${month}` : undefined
+            selectedRow?.billed ? `${SUMMARY_SOURCE}, ${monthText}` : selectedRow?.flowAi ? `${FLOW_AI_SOURCE}, ${monthText}` : undefined
           }
           flowAi={selectedRow?.flowAi}
           onClose={() => setSelected(null)}
@@ -1314,22 +1372,14 @@ const toDraft = (a: CostAssumptions): Draft => ({
 /** Rounds a converted amount to a sensible number of decimals for the input. */
 const roundTo = (n: number, digits: number) => String(Math.round(n * 10 ** digits) / 10 ** digits);
 
-interface TopAgent {
-  label: string;
-  env: string;
-  value: number;
-}
-
 function AssumptionsPanel({
   value,
   month,
-  topAgents,
   onClose,
   onSave,
 }: {
   value: CostAssumptions;
   month: string;
-  topAgents: TopAgent[];
   onClose: () => void;
   onSave: (a: CostAssumptions) => void;
 }) {
@@ -1422,26 +1472,9 @@ function AssumptionsPanel({
         </li>
         <li className="muted">
           Environment credits come from the Power Platform licensing API ({month}, month to date). Consumption per agent / agent flow comes from the licensing API
-          (resource thresholds: resourceConsumption per resource) on Refresh usage, matched by agent id.
+          (resource thresholds: resourceConsumption per resource) on Refresh, matched by agent id.
         </li>
       </ul>
-
-      <h4 className="ai-section">Top agents by Copilot Credits</h4>
-      {topAgents.length ? (
-        <ul className="hbars hbars-tall">
-          {topAgents.map((a, i) => (
-            <li key={i} title={`${a.label} · ${a.env}`} style={{ gridTemplateColumns: '150px 1fr 60px' }}>
-              <span className="lbl">{a.label}</span>
-              <span className="track">
-                <span className="bar" style={{ width: `${Math.max(2, (a.value / topAgents[0].value) * 100)}%`, background: TYPE_COLOR['Copilot Studio'] }} />
-              </span>
-              <span className="num">{fmtCredits(a.value)}</span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="small muted">No agent consumption loaded yet (Refresh usage).</p>
-      )}
     </SidePanel>
   );
 }

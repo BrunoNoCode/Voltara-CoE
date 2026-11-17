@@ -110,7 +110,7 @@ export function TagManagement() {
             <input placeholder={`Search ${isFlag ? 'flags' : 'tags'}...`} value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
         </div>
-        <div className="table-wrap">
+        <div className="table-wrap rows-10">
           <table className="table">
             <thead>
               <tr>
